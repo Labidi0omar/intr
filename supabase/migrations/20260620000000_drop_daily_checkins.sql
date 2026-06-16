@@ -1,0 +1,15 @@
+-- Drop the dead daily_checkins table.
+--
+-- The table was read in six places but never written, so every read returned
+-- empty and silently degraded features (journal context, dashboard history,
+-- replanner context, gap detection, deload nudge, workout energy pre-fill).
+--
+-- All reads have been repointed to workout_sessions (energy_level is the only
+-- real readiness signal that's actually captured today). See the same-PR
+-- changes in:
+--   - app/workout.tsx, app/(tabs)/home.tsx, app/(tabs)/journal.tsx
+--   - src/utils/gapDetection.ts
+--   - supabase/functions/replan-today/index.ts
+--
+-- Idempotent: re-runnable.
+drop table if exists public.daily_checkins cascade;
