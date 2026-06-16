@@ -22,7 +22,8 @@
       "autoIncrement": true,
       "channel": "production",
       "env": {
-        "EXPO_PUBLIC_SENTRY_DSN": "https://5a7911c46f9eb5a80dfea915aa0da0c2@o4511469829292032.ingest.de.sentry.io/4511469831848016"
+        "EXPO_PUBLIC_SENTRY_DSN": "https://5a7911c46f9eb5a80dfea915aa0da0c2@o4511469829292032.ingest.de.sentry.io/4511469831848016",
+        "EXPO_PUBLIC_FACEBOOK_APP_ID": "1299574828560138"
       }
     }
   },
