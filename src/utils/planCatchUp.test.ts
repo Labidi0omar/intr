@@ -335,6 +335,115 @@ describe('buildCatchUpRows — mesocycle phase', () => {
     // Upper/Lower alternates. Position 3 → dayTypes[3 % 2] = lower.
     expect(all[0].workoutType).toBe('Lower');
   });
+
+  // ── bro_split resume — phase offset via inWeekStartIndex ──────────────
+  // BUG FIX: before inWeekStartIndex existed, the 'fixed' bro_split rotation
+  // ignored dayIndexOffset entirely and always restarted at template
+  // position 0 (Chest), regardless of completed-session count. A user who
+  // had trained Chest/Back/Shoulders and missed Arms always got Chest on
+  // their first catch-up day instead of Arms. The fix mirrors how
+  // cycle/alternating splits resume rotation, but through a separate param
+  // because the fixed template doesn't read dayIndexOffset.
+  //
+  // dayTypes template: ['chest','back','shoulders','arms','legs'] → length 5.
+
+  it('bro_split resume: mesocyclePosition 7 → first catch-up day is Shoulders, NOT Chest', () => {
+    // Position 7 ≡ 2 mod 5 → dayTypes[2] = shoulders. With backlogN 3 the
+    // catch-up packs three back-to-back days continuing through the
+    // template: shoulders → arms → legs (positions 7,8,9 of the rotation).
+    const { rows } = buildCatchUpRows({
+      ...baseArgs,
+      trainingDays: 5,
+      split: 'bro_split',
+      backlogN: 3,
+      mesocyclePosition: 7,
+    });
+    const all = flatten(rows);
+    expect(all[0]).toEqual({ date: baseArgs.todayIso, workoutType: 'Shoulders' });
+    expect(all[1]).toEqual({ date: addDays(baseArgs.todayIso, 1), workoutType: 'Arms' });
+    expect(all[2]).toEqual({ date: addDays(baseArgs.todayIso, 2), workoutType: 'Legs' });
+  });
+
+  it('bro_split resume: future segment continues at the right type after catch-up', () => {
+    // backlogN 3 from position 7 lands the future segment at position 10
+    // (= 10 % 5 = 0 → chest). Normal cadence for trainingDays=5 is
+    // [0,1,3,4,6] anchored at today+3. The first FIVE future training
+    // days should walk the full template starting at chest.
+    const { rows } = buildCatchUpRows({
+      ...baseArgs,
+      trainingDays: 5,
+      split: 'bro_split',
+      backlogN: 3,
+      mesocyclePosition: 7,
+    });
+    const all = flatten(rows);
+    // First 3 are the catch-up (shoulders/arms/legs); next 5 are the
+    // future segment's week 0 — chest/back/shoulders/arms/legs.
+    expect(all.slice(3, 8).map(s => s.workoutType)).toEqual([
+      'Chest', 'Back', 'Shoulders', 'Arms', 'Legs',
+    ]);
+  });
+
+  it('bro_split skip-ahead (backlogN 0): future starts at the user\'s true next type', () => {
+    // Position 4 ≡ 4 → legs. With NO backlog, the future segment alone
+    // determines the first session. Anchored at today on normal cadence
+    // [0,1,3,4,6], the first training day = today and the workoutType
+    // must be legs — the type the user is due to train next.
+    const { rows } = buildCatchUpRows({
+      ...baseArgs,
+      trainingDays: 5,
+      split: 'bro_split',
+      backlogN: 0,
+      mesocyclePosition: 4,
+    });
+    const all = flatten(rows);
+    expect(all[0]).toEqual({ date: baseArgs.todayIso, workoutType: 'Legs' });
+    // Subsequent week-0 training days continue through the template,
+    // wrapping back to chest after legs.
+    expect(all.slice(0, 5).map(s => s.workoutType)).toEqual([
+      'Legs', 'Chest', 'Back', 'Shoulders', 'Arms',
+    ]);
+  });
+
+  it('bro_split regression: mesocyclePosition 0 still starts at Chest (offset = 0)', () => {
+    // The fix must not move the rotation for a fresh user. Position 0
+    // mod 5 = 0 → Chest, identical to the pre-fix behavior.
+    const { rows } = buildCatchUpRows({
+      ...baseArgs,
+      trainingDays: 5,
+      split: 'bro_split',
+      backlogN: 0,
+      mesocyclePosition: 0,
+    });
+    const all = flatten(rows);
+    expect(all[0].workoutType).toBe('Chest');
+  });
+
+  it('bro_split exact-week boundary: mesocyclePosition 5 wraps cleanly back to Chest', () => {
+    // Position 5 mod 5 = 0 — same as a fresh user. Catches an off-by-one
+    // where the mod might land on 1 (Back) instead.
+    const { rows } = buildCatchUpRows({
+      ...baseArgs,
+      trainingDays: 5,
+      split: 'bro_split',
+      backlogN: 0,
+      mesocyclePosition: 5,
+    });
+    expect(flatten(rows)[0].workoutType).toBe('Chest');
+  });
+
+  it('bro_split: inWeekStartIndex is a no-op for PPL — passing it does not regress cycle splits', () => {
+    // Same scenario as the PPL resume test above but explicitly confirms
+    // that bro_split's phase-offset machinery does not leak into other
+    // splits. PPL position 5 must still resume at Legs via dayIndexOffset.
+    const { rows } = buildCatchUpRows({
+      ...baseArgs,
+      backlogN: 1,
+      mesocyclePosition: 5,
+      // No split specified → splitForDays(3) === 'ppl'.
+    });
+    expect(flatten(rows)[0].workoutType).toBe('Legs');
+  });
 });
 
 // ── Row-coverage invariants ───────────────────────────────────────────

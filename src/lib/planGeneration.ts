@@ -753,6 +753,16 @@ export interface GeneratePlanArgs {
    *  week and computes blockWeek from the user's plan anchor; tests that
    *  span a full block use weeksAhead=4 with blockWeek=1. */
   blockWeek?: number;
+  /** For FIXED-ROTATION splits ONLY (bro_split): shift where the weekly
+   *  template begins. Default 0 → template starts at dayTypes[0] (chest).
+   *  Passing 2 → starts at dayTypes[2] (shoulders), then arms, legs, chest,
+   *  back. Used by buildCatchUpRows so a bro_split user mid-mesocycle resumes
+   *  at the correct next type instead of restarting at chest.
+   *  NO-OP for cycle/alternating/same rotations — those already honor
+   *  dayIndexOffset, so passing this param for PPL / upper_lower /
+   *  full_body has no effect on output. Only the fixed-template lookup
+   *  reads it. */
+  inWeekStartIndex?: number;
 }
 
 export function generatePlan(args: GeneratePlanArgs): PlanDay[] {
@@ -765,6 +775,11 @@ export function generatePlan(args: GeneratePlanArgs): PlanDay[] {
   const startBlockWeekRaw = args.blockWeek ?? 1;
   const startBlockWeek =
     startBlockWeekRaw >= 1 && startBlockWeekRaw <= 4 ? Math.floor(startBlockWeekRaw) : 1;
+  // Fixed-rotation phase shift. Only consumed by the 'fixed' branch below;
+  // ignored by cycle/alternating/same rotations (they advance via globalI/
+  // cycleIndex/dayIndexOffset). Clamped to non-negative; values larger than
+  // dayTypes.length are mod'd at the lookup site.
+  const startInWeekIdx = Math.max(0, Math.floor(args.inWeekStartIndex ?? 0));
   // Split is the user's explicit choice (preferred_split), falling back to the
   // days-derived default when absent/invalid. The day COUNT still comes from
   // trainingDays via baseOffsets, so any split×days combo is supported: e.g.
@@ -830,13 +845,26 @@ export function generatePlan(args: GeneratePlanArgs): PlanDay[] {
       // those drifting weeks into a chest-less, arms-heavy mess. Cross-week
       // variety for a bro split comes from exercise SELECTION (planHistory),
       // not from rotating which muscle lands on which day.
+      //
+      // PHASE OFFSET (startInWeekIdx): shifts WHICH muscle lands on
+      // inWeekIdx 0. Default 0 — chest leads, identical to the prior
+      // behavior. A non-zero value lets buildCatchUpRows start a mid-
+      // mesocycle bro_split catch-up at the user's true next type
+      // (shoulders/arms/legs/...) instead of restarting at chest. The
+      // template is still stable across weeks: every week's inWeekIdx 0
+      // is the SAME shifted muscle, so the user's weekly schedule
+      // doesn't wander once it's set.
+      //
       // dropOrder supplies the extra day(s) when training days exceed
-      // dayTypes.length (bro_split with 6–7 days/week).
+      // dayTypes.length (bro_split with 6–7 days/week). It is NOT
+      // shifted by startInWeekIdx — dropOrder is a deterministic
+      // 6th/7th-day filler whose semantics ("repeat arms then
+      // shoulders") don't depend on the rotation phase.
       const dropOrder = (rule as any).dropOrder as string[] | undefined;
       if (inWeekIdx >= dayTypes.length && dropOrder && dropOrder.length > 0) {
         dayType = dropOrder[(inWeekIdx - dayTypes.length) % dropOrder.length];
       } else {
-        dayType = dayTypes[inWeekIdx % dayTypes.length];
+        dayType = dayTypes[(inWeekIdx + startInWeekIdx) % dayTypes.length];
       }
     } else {
       dayType = dayTypes[0];

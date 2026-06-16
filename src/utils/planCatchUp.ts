@@ -139,10 +139,12 @@ function pickDefaultDayOffsets(trainingDays: number): number[] {
  * The caller's gate (skip when backlogN === 0) makes resume a strict
  * no-op in that scenario.
  *
- * Limitation: for bro_split, the fixed weekly template restarts at chest
- * — generatePlan's 'fixed' rotation is keyed on inWeekIdx, not on
- * dayIndexOffset. PPL / upper_lower / full_body resume rotation at the
- * user's true next type.
+ * Bro_split resume: the fixed weekly template now starts at the user's
+ * true next type (computed from `mesocyclePosition % daysPerWeek` and
+ * threaded through generatePlan via `inWeekStartIndex`), matching how
+ * PPL / upper_lower / full_body resume their rotation via
+ * dayIndexOffset. Before that param existed, bro_split resume always
+ * restarted at chest regardless of completed-session count.
  */
 export function buildCatchUpRows(args: BuildCatchUpRowsArgs): CatchUpRowsResult {
   const horizonWeeks = Math.max(1, args.horizonWeeks ?? 4);
@@ -158,13 +160,34 @@ export function buildCatchUpRows(args: BuildCatchUpRowsArgs): CatchUpRowsResult 
   // large enough to cover N; we slice the first N out and re-stamp their
   // dates as today, today+1, …. For PPL/upper_lower/full_body the
   // dayIndexOffset positions the rotation at the user's next due type;
-  // for bro_split the fixed weekly template restarts at chest (see
-  // limitation note above).
+  // for bro_split the new inWeekStartIndex param does the same job
+  // (the fixed template ignores dayIndexOffset by design).
   let nextDayIndexOffset = args.mesocyclePosition + backlogN;
   let nextAnchor = addDays(args.todayIso, backlogN);
   const catchUpCalendarWeeks = Math.floor(backlogN / 7);
   let nextBlockWeek =
     ((args.blockWeek - 1 + catchUpCalendarWeeks) % 4) + 1;
+
+  // Bro_split phase offset. For fixed-rotation splits we mirror the
+  // dayIndexOffset trick: shift the template start by (position % N), where
+  // N is the length of the bro_split dayTypes template (5: chest, back,
+  // shoulders, arms, legs). For all other splits we pass 0 — they advance
+  // via dayIndexOffset already and inWeekStartIndex is a documented no-op.
+  //
+  // Catch-up call uses mesocyclePosition (the user's position TODAY).
+  // Future call uses nextDayIndexOffset (mesocyclePosition + backlogN —
+  // the user's position when the future segment STARTS). Using the same
+  // value at both call sites would drop a discontinuity at the boundary
+  // when backlogN % 5 !== 0, so we recompute per segment exactly the
+  // same way the cycle splits recompute their dayIndexOffset.
+  const BRO_SPLIT_DAYS_PER_WEEK = 5;
+  const isBroSplit = args.split === 'bro_split';
+  const catchUpInWeekStart = isBroSplit
+    ? args.mesocyclePosition % BRO_SPLIT_DAYS_PER_WEEK
+    : 0;
+  const futureInWeekStart = isBroSplit
+    ? nextDayIndexOffset % BRO_SPLIT_DAYS_PER_WEEK
+    : 0;
 
   if (backlogN > 0) {
     const consecutiveOffsets = [0, 1, 2, 3, 4, 5, 6];
@@ -181,6 +204,7 @@ export function buildCatchUpRows(args: BuildCatchUpRowsArgs): CatchUpRowsResult 
       dayIndexOffset: args.mesocyclePosition,
       blockIndex: args.blockIndex,
       blockWeek: args.blockWeek,
+      inWeekStartIndex: catchUpInWeekStart,
     });
     const catchUpSlice = catchUp.slice(0, backlogN);
     // Re-stamp dates as a defensive measure — generatePlan should
@@ -198,6 +222,8 @@ export function buildCatchUpRows(args: BuildCatchUpRowsArgs): CatchUpRowsResult 
   // Anchor at (today + N). Cadence offsets are the user's normal pattern.
   // dayIndexOffset advances by N so the rotation step continues. blockWeek
   // advances by however many CALENDAR weeks the catch-up consumed.
+  // inWeekStartIndex is (mesocyclePosition + backlogN) % 5 for bro_split
+  // (== nextDayIndexOffset % 5), 0 otherwise.
   const future = generatePlan({
     fitnessLevel: args.fitnessLevel,
     trainingDays: args.trainingDays,
@@ -210,6 +236,7 @@ export function buildCatchUpRows(args: BuildCatchUpRowsArgs): CatchUpRowsResult 
     dayIndexOffset: nextDayIndexOffset,
     blockIndex: args.blockIndex,
     blockWeek: nextBlockWeek,
+    inWeekStartIndex: futureInWeekStart,
   });
   allSessions.push(...future);
 
