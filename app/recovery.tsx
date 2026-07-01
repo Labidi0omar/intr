@@ -360,7 +360,7 @@ export default function RecoveryScreen() {
             Logged: {label}. Recovery counts toward your streak — come back tomorrow.
           </Text>
           <View style={{ height: layout.spacing.lg }} />
-          <Button title="Back to Home" onPress={() => router.replace('/home')} />
+          <Button title="Back to Home" onPress={() => router.replace('/(tabs)/home')} />
         </View>
       </SafeAreaView>
     );
@@ -392,7 +392,7 @@ export default function RecoveryScreen() {
 
           <View style={styles.footer}>
             <TouchableOpacity
-              onPress={() => router.replace('/home')}
+              onPress={() => router.replace('/(tabs)/home')}
               activeOpacity={0.6}
               hitSlop={{ top: 10, bottom: 10, left: 12, right: 12 }}
               style={styles.backLinkWrap}
@@ -411,7 +411,7 @@ export default function RecoveryScreen() {
         <View style={styles.centerWrap}>
           <Text style={styles.kicker}>REST DAY</Text>
           <Text style={styles.errorText}>{errorMsg || 'Something went wrong.'}</Text>
-          <Button title="Back to Home" variant="ghost" onPress={() => router.replace('/home')} />
+          <Button title="Back to Home" variant="ghost" onPress={() => router.replace('/(tabs)/home')} />
         </View>
       </SafeAreaView>
     );
@@ -431,7 +431,7 @@ export default function RecoveryScreen() {
               : "Nice. Counts toward your streak."}
           </Text>
           <View style={{ height: layout.spacing.lg }} />
-          <Button title="Back to Home" onPress={() => router.replace('/home')} />
+          <Button title="Back to Home" onPress={() => router.replace('/(tabs)/home')} />
         </View>
       </SafeAreaView>
     );
@@ -495,7 +495,7 @@ export default function RecoveryScreen() {
             <Text style={styles.finishBtnText}>{isSaving ? 'SAVING…' : 'FINISH'}</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            onPress={() => router.replace('/home')}
+            onPress={() => router.replace('/(tabs)/home')}
             disabled={isSaving}
             activeOpacity={0.6}
             hitSlop={{ top: 10, bottom: 10, left: 12, right: 12 }}
@@ -582,7 +582,7 @@ function makeStyles(colors: any) {
     },
     kicker: {
       fontFamily: typography.family.body,
-      fontSize: 11,
+      fontSize: typography.size.s11,
       letterSpacing: 1.4,
       color: colors.accentPositive,
       textTransform: 'uppercase',
@@ -590,21 +590,21 @@ function makeStyles(colors: any) {
     },
     headline: {
       fontFamily: typography.family.heading,
-      fontSize: 28,
+      fontSize: typography.size.s28,
       letterSpacing: -0.4,
       color: colors.textPrimary,
       marginBottom: 6,
     },
     note: {
       fontFamily: typography.family.body,
-      fontSize: 14,
+      fontSize: typography.size.s14,
       lineHeight: 20,
       marginBottom: layout.spacing.lg,
       letterSpacing: 0.1,
     },
     subhead: {
       fontFamily: typography.family.body,
-      fontSize: 14,
+      fontSize: typography.size.s14,
       color: colors.textSecondary,
       marginBottom: layout.spacing.lg,
       letterSpacing: 0.1,
@@ -620,14 +620,14 @@ function makeStyles(colors: any) {
     },
     menuCardTitle: {
       fontFamily: typography.family.heading,
-      fontSize: 18,
+      fontSize: typography.size.s18,
       letterSpacing: 0.2,
       color: colors.textPrimary,
       marginBottom: 4,
     },
     menuCardSubtitle: {
       fontFamily: typography.family.body,
-      fontSize: 13,
+      fontSize: typography.size.s13,
       lineHeight: 18,
       color: colors.textSecondary,
       letterSpacing: 0.1,
@@ -639,19 +639,19 @@ function makeStyles(colors: any) {
     },
     repickLink: {
       fontFamily: typography.family.body,
-      fontSize: 13,
+      fontSize: typography.size.s13,
       color: colors.textSecondary,
       letterSpacing: 0.3,
     },
     loadingText: {
       fontFamily: typography.family.body,
-      fontSize: 14,
+      fontSize: typography.size.s14,
       color: colors.textSecondary,
       textAlign: 'center',
     },
     errorText: {
       fontFamily: typography.family.body,
-      fontSize: 15,
+      fontSize: typography.size.s15,
       lineHeight: 21,
       color: colors.textPrimary,
       textAlign: 'center',
@@ -659,7 +659,7 @@ function makeStyles(colors: any) {
     },
     errorInline: {
       fontFamily: typography.family.body,
-      fontSize: 13,
+      fontSize: typography.size.s13,
       lineHeight: 18,
       color: colors.accentRed,
       marginTop: layout.spacing.md,
@@ -667,14 +667,14 @@ function makeStyles(colors: any) {
     // ── Header (mirrors workout.tsx pre/active title styling) ─────────
     preTitle: {
       fontFamily: typography.family.heading,
-      fontSize: 28,
+      fontSize: typography.size.s28,
       letterSpacing: -0.4,
       color: colors.textPrimary,
       marginBottom: 4,
     },
     preSubtitle: {
       fontFamily: typography.family.body,
-      fontSize: 12,
+      fontSize: typography.size.s12,
       letterSpacing: 2,
       color: colors.textMuted,
       textTransform: 'uppercase',
@@ -702,12 +702,12 @@ function makeStyles(colors: any) {
     },
     exImageGlyph: {
       fontFamily: typography.family.heading,
-      fontSize: 56,
+      fontSize: typography.size.s56,
       color: colors.textMuted,
     },
     exIndex: {
       fontFamily: typography.family.body,
-      fontSize: 11,
+      fontSize: typography.size.s11,
       letterSpacing: 1.4,
       color: colors.textMuted,
       paddingHorizontal: layout.spacing.md,
@@ -715,21 +715,21 @@ function makeStyles(colors: any) {
     },
     exName: {
       fontFamily: typography.family.heading,
-      fontSize: 22,
+      fontSize: typography.size.s22,
       letterSpacing: -0.2,
       paddingHorizontal: layout.spacing.md,
       marginBottom: 4,
     },
     exDose: {
       fontFamily: typography.family.body,
-      fontSize: 14,
+      fontSize: typography.size.s14,
       letterSpacing: 0.1,
       paddingHorizontal: layout.spacing.md,
       marginBottom: 6,
     },
     exCue: {
       fontFamily: typography.family.body,
-      fontSize: 12,
+      fontSize: typography.size.s12,
       lineHeight: 17,
       letterSpacing: 0.1,
       paddingHorizontal: layout.spacing.md,
@@ -747,21 +747,21 @@ function makeStyles(colors: any) {
     },
     finishBtnText: {
       fontFamily: typography.family.heading,
-      fontSize: 13,
+      fontSize: typography.size.s13,
       color: colors.background,
       letterSpacing: 1,
       textTransform: 'uppercase',
     },
     completeHeadline: {
       fontFamily: typography.family.heading,
-      fontSize: 28,
+      fontSize: typography.size.s28,
       color: colors.textPrimary,
       marginBottom: layout.spacing.sm,
       textAlign: 'center',
     },
     completeBody: {
       fontFamily: typography.family.body,
-      fontSize: 14,
+      fontSize: typography.size.s14,
       lineHeight: 20,
       color: colors.textSecondary,
       textAlign: 'center',
@@ -774,7 +774,7 @@ function makeStyles(colors: any) {
     },
     backLink: {
       fontFamily: typography.family.body,
-      fontSize: 13,
+      fontSize: typography.size.s13,
       color: colors.textSecondary,
       letterSpacing: 0.3,
     },

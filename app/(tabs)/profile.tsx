@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   Animated,
   Dimensions,
   LayoutAnimation,
@@ -28,6 +29,8 @@ import { reportSilent } from '../../src/lib/errorReporting';
 import { layout, typography } from '../../src/theme';
 import { cancelAllNotifications, getSavedNotifTime, NOTIF_TIME_KEY, NotifTime, requestNotificationPermission, saveNotifTime, scheduleWorkoutNotifications } from '../../src/utils/notifications';
 import { ensureCurrentWeekPlan, writeCachedProfileInputs } from '../../src/lib/planSync';
+import { splitForDays, type SplitId } from '../../src/lib/planGeneration';
+import { hasConsecutiveRun, normalizeTrainingWeekdays } from '../../src/utils/trainingWeekdays';
 import { BUILD_TAG } from '../../src/constants/buildInfo';
 import { performDeleteAccount } from '../../src/lib/deleteAccount';
 import { useEntitlement } from '../../src/lib/purchases';
@@ -70,6 +73,10 @@ type Profile = {
   fitness_level: string;
   preferred_split: string;
   training_days: number;
+  /** User's chosen calendar weekdays (0=Sun..6=Sat). Null = no explicit
+   *  pick (legacy / 1-2-7-day users); the generator falls back to
+   *  pickDefaultDayOffsets in that case. */
+  training_weekdays: number[] | null;
   created_at: string;
 };
 
@@ -87,14 +94,30 @@ type RecordPR = {
 
 type ModalType = 'none' | 'weight' | 'name' | 'goal' | 'fitness_level' | 'split' | 'notifications' | 'training_days' | 'location';
 
-const GOAL_OPTIONS: { value: string; label: string }[] = [
-  { value: 'build_muscle', label: 'Build Muscle' },
-  { value: 'lose_weight', label: 'Lose Weight' },
-  { value: 'improve_endurance', label: 'Improve Endurance' },
-  { value: 'general_fitness', label: 'General Fitness' },
+// Closed set enforced by the profiles_goal_check CHECK constraint. The
+// previous vocabulary (build_muscle / lose_weight / improve_endurance /
+// general_fitness) was already split-brain against the DB constraint and
+// silently failed on save; unified here so onboarding + Profile write the
+// same three values the migration backfilled the legacy rows to.
+const GOAL_OPTIONS: { value: 'strength' | 'muscle' | 'general'; label: string }[] = [
+  { value: 'strength', label: 'Strength' },
+  { value: 'muscle', label: 'Build Muscle' },
+  { value: 'general', label: 'General Fitness' },
 ];
 const FITNESS_LEVEL_OPTIONS = ['beginner', 'intermediate', 'advanced'];
 const TRAINING_DAYS_OPTIONS = [2, 3, 4, 5, 6];
+// Weekday picker layout — Mon..Sun, values are JS Date.getDay() indices.
+const WEEKDAY_LAYOUT: { value: number; label: string }[] = [
+  { value: 1, label: 'M' },
+  { value: 2, label: 'T' },
+  { value: 3, label: 'W' },
+  { value: 4, label: 'T' },
+  { value: 5, label: 'F' },
+  { value: 6, label: 'S' },
+  { value: 0, label: 'S' },
+];
+const MIN_WEEKDAYS_PICK = 3;
+const MAX_WEEKDAYS_PICK = 6;
 const LOCATION_OPTIONS: { value: 'Gym' | 'Home'; label: string }[] = [
   { value: 'Gym', label: 'Gym' },
   { value: 'Home', label: 'Home' },
@@ -155,6 +178,11 @@ export default function ProfileScreen() {
   const [notifAMPM, setNotifAMPM] = useState<'AM' | 'PM'>('AM');
   const [defaultLocation, setDefaultLocation] = useState<'Gym' | 'Home'>('Gym');
   const [settingsExpanded, setSettingsExpanded] = useState(false);
+  // Transient state for the weekday picker modal. Initialized on openModal
+  // from profile.training_weekdays so toggling can be cancelled by closing
+  // the sheet without saving. The picker is the source of truth for the
+  // day count — count is derived on save.
+  const [editingWeekdays, setEditingWeekdays] = useState<number[]>([]);
 
   const toggleSettings = () => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -307,7 +335,109 @@ export default function ProfileScreen() {
     setSuccessMsg('');
     if (type === 'name') setInputValue(profile?.username || '');
     if (type === 'weight' && currentWeight) setInputValue(currentWeight.toString());
+    if (type === 'training_days') {
+      // Seed the picker from the profile. Fall back to a Mon/Wed/Fri-style
+      // default when the user is a legacy/out-of-scope account (null
+      // weekdays); the user can adjust before saving. The cap of
+      // MAX_WEEKDAYS_PICK is enforced on save, not on seed — an existing
+      // 7-day user opening the modal sees their 7 days and can keep them
+      // (we only refuse to PUSH past the cap on toggle).
+      const seeded = normalizeTrainingWeekdays(profile?.training_weekdays);
+      setEditingWeekdays(seeded ?? [1, 3, 5]);
+    }
     setModalType(type);
+  };
+
+  // Toggle a weekday in the picker. Cap-aware: a tap that would push the
+  // selection past MAX_WEEKDAYS_PICK is dropped (UI also disables the chip).
+  const toggleEditingWeekday = (w: number) => {
+    setEditingWeekdays(prev => {
+      if (prev.includes(w)) return prev.filter(x => x !== w);
+      if (prev.length >= MAX_WEEKDAYS_PICK) return prev;
+      return [...prev, w].sort((a, b) => a - b);
+    });
+  };
+
+  // Save the weekday picker. Persists training_weekdays + the derived
+  // training_days count; runs the split-mismatch guardrail (split may
+  // change atomically with the day count); rebuilds the plan.
+  const saveWeekdaysEdit = async () => {
+    if (editingWeekdays.length < MIN_WEEKDAYS_PICK || editingWeekdays.length > MAX_WEEKDAYS_PICK) return;
+    try {
+      setIsSaving(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user || !profile) return;
+
+      const n = editingWeekdays.length;
+      const currentSplit = (profile.preferred_split ?? 'ppl') as SplitId;
+      const finalSplit = await askSplitMismatch(n, currentSplit);
+      const updateParams: { training_days: number; training_weekdays: number[]; preferred_split?: SplitId } = {
+        training_days: n,
+        training_weekdays: editingWeekdays,
+      };
+      if (finalSplit !== currentSplit) updateParams.preferred_split = finalSplit;
+
+      const { error } = await supabase.from('profiles').update(updateParams).eq('id', user.id);
+      if (error) {
+        reportSilent(error, 'profile:saveWeekdays');
+        setSuccessMsg(`Save failed: ${error.message}`);
+        setTimeout(() => setSuccessMsg(''), 6000);
+        return;
+      }
+
+      setProfile({
+        ...profile,
+        training_days: n,
+        training_weekdays: editingWeekdays,
+        ...(updateParams.preferred_split ? { preferred_split: updateParams.preferred_split } : {}),
+      });
+      await writeCachedProfileInputs({
+        training_days: n,
+        training_weekdays: editingWeekdays,
+        ...(updateParams.preferred_split ? { preferred_split: updateParams.preferred_split } : {}),
+      });
+      await ensureCurrentWeekPlan({ force: true });
+      setSuccessMsg('Plan rebuilt for your new schedule');
+      setTimeout(() => setSuccessMsg(''), 4000);
+    } catch (e) {
+      reportSilent(e, 'profile:saveWeekdays');
+    } finally {
+      setIsSaving(false);
+      setModalType('none');
+    }
+  };
+
+  // Soft guardrail used by both the split-edit and training-days-edit paths.
+  // When the user's days/split combo doesn't match splitForDays(days), prompt
+  // them to switch to the recommended split. Resolves with whichever split
+  // the user picked — the caller persists it. No-op (resolves immediately
+  // with `picked`) when the combo already matches. Android back-dismiss
+  // counts as "keep my choice" so the user is never trapped.
+  const askSplitMismatch = (days: number, picked: SplitId): Promise<SplitId> => {
+    return new Promise<SplitId>(resolve => {
+      const recommended = splitForDays(days);
+      if (picked === recommended) {
+        resolve(picked);
+        return;
+      }
+      const labelFor = (id: SplitId): string => {
+        switch (id) {
+          case 'full_body': return 'Full Body';
+          case 'upper_lower': return 'Upper / Lower';
+          case 'ppl': return 'Push / Pull / Legs';
+          case 'bro_split': return 'Bro Split';
+        }
+      };
+      Alert.alert(
+        'Quick check',
+        `For ${days} days a week, ${labelFor(recommended)} trains every muscle group more evenly than ${labelFor(picked)}. Use ${labelFor(recommended)}?`,
+        [
+          { text: `Use ${labelFor(recommended)}`, onPress: () => resolve(recommended) },
+          { text: 'Keep my choice', style: 'cancel', onPress: () => resolve(picked) },
+        ],
+        { onDismiss: () => resolve(picked) },
+      );
+    });
   };
 
   const handleSaveModal = async (forcedValue?: string) => {
@@ -322,7 +452,17 @@ export default function ProfileScreen() {
         if (modalType === 'name') updateParams.username = val;
         if (modalType === 'goal') updateParams.goal = val;
         if (modalType === 'fitness_level') updateParams.fitness_level = val;
-        if (modalType === 'split') updateParams.preferred_split = val;
+
+        // Split edit: same soft guardrail as onboarding. If the picked split
+        // doesn't match splitForDays(training_days), prompt the user. Their
+        // answer drives what we persist. Asked through an Alert so the dialog
+        // works on both iOS and Android without a custom modal.
+        if (modalType === 'split') {
+          const finalSplit = profile?.training_days
+            ? await askSplitMismatch(profile.training_days, val as SplitId)
+            : (val as SplitId);
+          updateParams.preferred_split = finalSplit;
+        }
 
         const { error } = await supabase.from('profiles').update(updateParams).eq('id', user.id);
         if (error) {
@@ -345,7 +485,7 @@ export default function ProfileScreen() {
         // keep working without a network read. Location lives in its own key
         // (user:defaultLocation); only split/level belong to this blob.
         // Fire-and-forget.
-        if (modalType === 'split') writeCachedProfileInputs({ preferred_split: val });
+        if (modalType === 'split') writeCachedProfileInputs({ preferred_split: updateParams.preferred_split });
         if (modalType === 'fitness_level') writeCachedProfileInputs({ fitness_level: val });
       } else if (modalType === 'weight') {
         const kg = parseFloat(val);
@@ -362,21 +502,6 @@ export default function ProfileScreen() {
               .eq('user_id', user.id)
               .order('logged_date', { ascending: true });
             if (newLogs) setWeightLogs(newLogs as ProgressLog[]);
-          }
-        }
-      } else if (modalType === 'training_days') {
-        const n = parseInt(val, 10);
-        if (!isNaN(n) && n >= 1 && n <= 7) {
-          const { error } = await supabase.from('profiles').update({ training_days: n }).eq('id', user.id);
-          if (!error && profile) {
-            setProfile({ ...profile, training_days: n });
-            // Mirror into the offline cache before regen so the fallback is
-            // current (Supabase stays the source of truth). Fire-and-forget.
-            await writeCachedProfileInputs({ training_days: n });
-            // Regenerate the plan with the new day count
-            await ensureCurrentWeekPlan({ force: true });
-            setSuccessMsg('Plan rebuilt for the new schedule');
-            setTimeout(() => setSuccessMsg(''), 4000);
           }
         }
       } else if (modalType === 'location') {
@@ -574,7 +699,25 @@ export default function ProfileScreen() {
               <View style={styles.avatarLarge}>
                 <Text style={styles.avatarLargeText}>{initial}</Text>
               </View>
-              <Text style={styles.usernameText}>{profile?.username}</Text>
+              {/* Long-press the username (DEV ONLY) to open the dev-scenario
+                  menu. __DEV__ gates the onLongPress handler so production
+                  builds attach undefined and the gesture is unreachable —
+                  same pattern as the Sentry smoke-test on the dashboard
+                  greeting in [app/(tabs)/home.tsx]. The route href is cast
+                  because Expo Router's typedRoutes file is auto-generated
+                  and stale for files added in the same change set; the
+                  route is registered in [app/_layout.tsx] so navigation
+                  works at runtime. */}
+              <Text
+                style={styles.usernameText}
+                onLongPress={
+                  __DEV__
+                    ? () => router.push('/dev-scenarios' as never)
+                    : undefined
+                }
+              >
+                {profile?.username}
+              </Text>
 
               <View style={styles.tagsRow}>
                 <TouchableOpacity
@@ -967,16 +1110,17 @@ export default function ProfileScreen() {
 
                 {modalType === 'training_days' && (
                   <View>
-                    <Text style={styles.sheetTitle}>Training Days / Week</Text>
+                    <Text style={styles.sheetTitle}>Which days can you train?</Text>
                     <Text style={[styles.sheetOptionDesc, { marginBottom: layout.spacing.md }]}>
-                      Changing this rebuilds your plan immediately.
+                      Pick the weekdays you're available. Changing this rebuilds your plan.
                     </Text>
-                    <View style={{ flexDirection: 'row', gap: 8 }}>
-                      {TRAINING_DAYS_OPTIONS.map(n => {
-                        const isActive = profile?.training_days === n;
+                    <View style={{ flexDirection: 'row', gap: 6 }}>
+                      {WEEKDAY_LAYOUT.map(opt => {
+                        const isActive = editingWeekdays.includes(opt.value);
+                        const atCap = !isActive && editingWeekdays.length >= MAX_WEEKDAYS_PICK;
                         return (
                           <TouchableOpacity
-                            key={n}
+                            key={opt.value}
                             style={[
                               {
                                 flex: 1,
@@ -987,21 +1131,46 @@ export default function ProfileScreen() {
                                 backgroundColor: isActive ? colors.surfaceElevated : colors.background,
                                 alignItems: 'center',
                                 justifyContent: 'center',
+                                opacity: atCap ? 0.4 : 1,
                               },
                             ]}
-                            onPress={() => handleSaveModal(String(n))}
+                            onPress={() => toggleEditingWeekday(opt.value)}
+                            disabled={atCap}
+                            accessibilityRole="button"
+                            accessibilityState={{ selected: isActive }}
+                            accessibilityLabel={`Toggle ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][opt.value]}`}
                           >
                             <Text style={{
                               fontFamily: typography.family.heading,
-                              fontSize: typography.size.lg,
+                              fontSize: typography.size.md,
                               color: isActive ? colors.accentTeal : colors.textPrimary,
                             }}>
-                              {n}
+                              {opt.label}
                             </Text>
                           </TouchableOpacity>
                         );
                       })}
                     </View>
+                    <Text style={[styles.sheetOptionDesc, { marginTop: layout.spacing.sm }]}>
+                      {editingWeekdays.length < MIN_WEEKDAYS_PICK
+                        ? `Pick at least ${MIN_WEEKDAYS_PICK} days.`
+                        : `${editingWeekdays.length} day${editingWeekdays.length === 1 ? '' : 's'} a week.`}
+                    </Text>
+                    {hasConsecutiveRun(editingWeekdays, 3) && (
+                      <Text style={[styles.sheetOptionDesc, { color: colors.accentAmber, marginTop: 4 }]}>
+                        Heads-up: three or more days in a row leaves little time to recover. Spread them out if you can.
+                      </Text>
+                    )}
+                    <Button
+                      title={isSaving ? 'Saving…' : 'Save'}
+                      onPress={() => { void saveWeekdaysEdit(); }}
+                      loading={isSaving}
+                      disabled={
+                        editingWeekdays.length < MIN_WEEKDAYS_PICK ||
+                        editingWeekdays.length > MAX_WEEKDAYS_PICK
+                      }
+                      style={{ marginTop: layout.spacing.lg }}
+                    />
                   </View>
                 )}
 
@@ -1234,7 +1403,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   avatarLargeText: {
     fontFamily: typography.family.heading,
-    fontSize: 40,
+    fontSize: typography.size.s40,
     color: colors.textPrimary,
   },
   usernameText: {
@@ -1262,11 +1431,11 @@ const makeStyles = (colors: any) => StyleSheet.create({
   tagDot: {
     width: 5,
     height: 5,
-    borderRadius: 2.5,
+    borderRadius: layout.radii.r2_5,
   },
   tagText: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 10,
+    fontSize: typography.size.s10,
     textTransform: 'uppercase',
     letterSpacing: 1,
     color: colors.textPrimary,
@@ -1296,19 +1465,19 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   recordsTitle: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 10,
+    fontSize: typography.size.s10,
     letterSpacing: 2,
     color: colors.accentAmber,
   },
   recordsAllTime: {
     fontFamily: typography.family.body,
-    fontSize: 9.5,
+    fontSize: typography.size.s9_5,
     letterSpacing: 1.5,
     color: colors.textMuted,
   },
   recordsEmpty: {
     fontFamily: typography.family.body,
-    fontSize: 13,
+    fontSize: typography.size.s13,
     color: colors.textSecondary,
     lineHeight: 20,
     paddingVertical: 8,
@@ -1325,26 +1494,26 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   recordName: {
     fontFamily: typography.family.heading,
-    fontSize: 13.5,
+    fontSize: typography.size.s13_5,
     letterSpacing: -0.2,
     color: colors.textPrimary,
   },
   recordDate: {
     fontFamily: typography.family.body,
-    fontSize: 9.5,
+    fontSize: typography.size.s9_5,
     letterSpacing: 1,
     color: colors.textMuted,
     marginTop: 2,
   },
   recordWeight: {
     fontFamily: typography.family.heading,
-    fontSize: 19,
+    fontSize: typography.size.s19,
     letterSpacing: -0.4,
     color: colors.accentAmber,
   },
   recordWeightUnit: {
     fontFamily: typography.family.body,
-    fontSize: 10,
+    fontSize: typography.size.s10,
     color: colors.textMuted,
   },
   lifetimeRow: {
@@ -1358,19 +1527,19 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   lifetimeLabel: {
     fontFamily: typography.family.body,
-    fontSize: 10,
+    fontSize: typography.size.s10,
     letterSpacing: 1.5,
     color: colors.textMuted,
   },
   lifetimeValue: {
     fontFamily: typography.family.heading,
-    fontSize: 16,
+    fontSize: typography.size.s16,
     letterSpacing: -0.3,
     color: colors.textPrimary,
   },
   lifetimeUnit: {
     fontFamily: typography.family.body,
-    fontSize: 10,
+    fontSize: typography.size.s10,
     color: colors.textMuted,
   },
 
@@ -1399,14 +1568,14 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   settingsToggleLabel: {
     fontFamily: typography.family.heading,
-    fontSize: 11,
+    fontSize: typography.size.s11,
     letterSpacing: 2,
     color: colors.textSecondary,
     textTransform: 'uppercase',
   },
   settingsToggleChev: {
     fontFamily: typography.family.heading,
-    fontSize: 20,
+    fontSize: typography.size.s20,
     color: colors.textMuted,
     lineHeight: 20,
   },
@@ -1444,7 +1613,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   weightCurrent: {
     fontFamily: typography.family.heading,
-    fontSize: 28,
+    fontSize: typography.size.s28,
     letterSpacing: -0.7,
     color: colors.textPrimary,
     lineHeight: 30,
@@ -1452,32 +1621,32 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   weightCurrentUnit: {
     fontFamily: typography.family.body,
-    fontSize: 13,
+    fontSize: typography.size.s13,
     color: colors.textMuted,
   },
   weightCurrentLabel: {
     fontFamily: typography.family.body,
-    fontSize: 10,
+    fontSize: typography.size.s10,
     letterSpacing: 1.5,
     color: colors.textMuted,
     marginTop: 4,
   },
   weightFirstEntryHint: {
     fontFamily: typography.family.body,
-    fontSize: 12,
+    fontSize: typography.size.s12,
     color: colors.textSecondary,
     marginTop: layout.spacing.md,
     lineHeight: 18,
   },
   weightDelta: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 14,
+    fontSize: typography.size.s14,
     letterSpacing: 0.4,
     fontVariant: ['tabular-nums'],
   },
   weightDeltaLabel: {
     fontFamily: typography.family.body,
-    fontSize: 9.5,
+    fontSize: typography.size.s9_5,
     letterSpacing: 1.5,
     color: colors.textMuted,
     marginTop: 2,
@@ -1492,7 +1661,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   weightEndpointText: {
     fontFamily: typography.family.body,
-    fontSize: 9.5,
+    fontSize: typography.size.s9_5,
     letterSpacing: 1.5,
     color: colors.textMuted,
     fontVariant: ['tabular-nums'],
@@ -1516,7 +1685,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   settingLabel: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 13,
+    fontSize: typography.size.s13,
     color: colors.textPrimary,
     flexShrink: 1,
     marginRight: layout.spacing.md,
@@ -1530,14 +1699,14 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   settingValue: {
     fontFamily: typography.family.body,
-    fontSize: 12.5,
+    fontSize: typography.size.s12_5,
     color: colors.textSecondary,
     fontVariant: ['tabular-nums'],
     letterSpacing: -0.1,
   },
   chevron: {
     fontFamily: typography.family.heading,
-    fontSize: 20,
+    fontSize: typography.size.s20,
     color: colors.textMuted,
     marginLeft: 4,
   },
@@ -1559,7 +1728,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   signedInMeta: {
     fontFamily: typography.family.body,
-    fontSize: 9.5,
+    fontSize: typography.size.s9_5,
     letterSpacing: 1.5,
     color: colors.textMuted,
     textAlign: 'center',
@@ -1570,7 +1739,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   modalOverlay: {
     flex: 1,
     justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: colors.scrimMedium,
   },
   bottomSheet: {
     backgroundColor: colors.surface,
@@ -1649,7 +1818,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   notifTimeInput: {
     fontFamily: typography.family.body,
-    fontSize: 28,
+    fontSize: typography.size.s28,
     color: colors.textPrimary,
     backgroundColor: colors.background,
     borderRadius: layout.smRadius,
@@ -1661,7 +1830,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   notifTimeSeparator: {
     fontFamily: typography.family.heading,
-    fontSize: 28,
+    fontSize: typography.size.s28,
     color: colors.textSecondary,
   },
   notifAMPMBtn: {
@@ -1735,7 +1904,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   deleteModalIconWrap: {
     width: 56,
     height: 56,
-    borderRadius: 28,
+    borderRadius: layout.radii.r28,
     borderWidth: 1.5,
     borderColor: colors.accentRed,
     backgroundColor: 'rgba(239,68,68,0.10)',
@@ -1746,7 +1915,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   deleteModalIconGlyph: {
     fontFamily: typography.family.heading,
-    fontSize: 28,
+    fontSize: typography.size.s28,
     lineHeight: 32,
     color: colors.accentRed,
     textAlign: 'center',
@@ -1755,7 +1924,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   // ── 2. Title ─────────────────────────────────────────────────────────
   deleteModalTitle: {
     fontFamily: typography.family.heading,
-    fontSize: 22,
+    fontSize: typography.size.s22,
     color: colors.textPrimary,
     textAlign: 'center',
     letterSpacing: 0.1,
@@ -1765,7 +1934,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   // ── 3. Subhead ───────────────────────────────────────────────────────
   deleteModalSubhead: {
     fontFamily: typography.family.body,
-    fontSize: 13,
+    fontSize: typography.size.s13,
     color: colors.textSecondary,
     textAlign: 'center',
     marginBottom: layout.spacing.md,
@@ -1787,7 +1956,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   deleteModalBullet: {
     fontFamily: typography.family.body,
-    fontSize: 14,
+    fontSize: typography.size.s14,
     lineHeight: 20,
     color: colors.accentRed,
     width: 14,
@@ -1796,7 +1965,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   deleteModalListText: {
     flex: 1,
     fontFamily: typography.family.body,
-    fontSize: 14,
+    fontSize: typography.size.s14,
     lineHeight: 20,
     color: colors.textPrimary,
   },
@@ -1810,7 +1979,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   // Bold-weight body, accentRed, centered — the line that has to land.
   deleteModalIrreversible: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 14,
+    fontSize: typography.size.s14,
     color: colors.accentRed,
     textAlign: 'center',
     letterSpacing: 0.3,
@@ -1829,7 +1998,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   deleteModalSubNoteText: {
     fontFamily: typography.family.body,
-    fontSize: 12,
+    fontSize: typography.size.s12,
     lineHeight: 17,
     color: colors.textPrimary,
   },
@@ -1840,7 +2009,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   // button with a hint.
   deleteModalFieldLabel: {
     fontFamily: typography.family.body,
-    fontSize: 11,
+    fontSize: typography.size.s11,
     letterSpacing: 1.4,
     color: colors.textMuted,
     textTransform: 'uppercase',
@@ -1858,7 +2027,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   //     the gate without making the field itself a "button".
   deleteModalInput: {
     fontFamily: typography.family.body,
-    fontSize: 16,
+    fontSize: typography.size.s16,
     letterSpacing: 0.5,
     color: colors.textPrimary,
     borderWidth: 1,
@@ -1879,7 +2048,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   // ── 8. Inline error ──────────────────────────────────────────────────
   deleteModalError: {
     fontFamily: typography.family.body,
-    fontSize: 13,
+    fontSize: typography.size.s13,
     lineHeight: 18,
     color: colors.accentRed,
     marginBottom: layout.spacing.md,
@@ -1905,7 +2074,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   deleteModalCancelText: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 14,
+    fontSize: typography.size.s14,
     color: colors.textSecondary,
     letterSpacing: 0.2,
   },
@@ -1926,15 +2095,15 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   deleteModalConfirmText: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 14,
-    color: '#FFFFFF',
+    fontSize: typography.size.s14,
+    color: colors.textPrimary,
     letterSpacing: 0.3,
   },
   // Build marker — footer-style. Muted, small, all the visual weight of a
   // copyright line. Not a banner.
   buildTag: {
     fontFamily: typography.family.body,
-    fontSize: 11,
+    fontSize: typography.size.s11,
     color: colors.textMuted,
     textAlign: 'center',
     marginTop: layout.spacing.xl,

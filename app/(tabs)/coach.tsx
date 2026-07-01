@@ -140,7 +140,7 @@ const makeStyles = (colors: any) =>
     },
     timestamp: {
       fontFamily: typography.family.body,
-      fontSize: 11,
+      fontSize: typography.size.s11,
       color: colors.accentTeal,
       textTransform: 'uppercase',
       letterSpacing: 1.2,
@@ -148,7 +148,7 @@ const makeStyles = (colors: any) =>
     },
     body: {
       fontFamily: typography.family.body,
-      fontSize: 15,
+      fontSize: typography.size.s15,
       lineHeight: 21,
       color: colors.textPrimary,
       letterSpacing: 0.1,

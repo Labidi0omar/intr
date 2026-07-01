@@ -48,7 +48,8 @@ describe('buildLiftProgression', () => {
     expect(obs!.type).toBe('lift_progression');
     expect(obs!.subtype).toBe('up');
     expect(obs!.factSig).toBe('up-85');
-    expect(obs!.salience).toBe(0.9);
+    // Demoted to 0.55 (bare description); see ranking comment in coachObservations.ts.
+    expect(obs!.salience).toBe(0.55);
     if (obs!.subtype === 'up') {
       expect(obs!.from).toBe(80);
       expect(obs!.to).toBe(85);
@@ -87,7 +88,9 @@ describe('buildLiftProgression', () => {
     );
     expect(obs?.subtype).toBe('stall');
     expect(obs!.factSig).toBe('stall-100-3');
-    expect(obs!.salience).toBe(0.8);
+    // Promoted to 0.85 (tactical: "one more rep before adding weight"
+    // is a directive worth leading on).
+    expect(obs!.salience).toBe(0.85);
   });
 
   it('a fresh stall (one extra equal session) advances factSig — re-fires under dedup', () => {
@@ -128,7 +131,8 @@ describe('buildLiftProgression', () => {
     if (obs?.subtype === 'comeback') {
       expect(obs.days).toBe(56);
       expect(obs.factSig).toBe('comeback-56');
-      expect(obs.salience).toBe(0.7);
+      // Per-lift comeback demoted to 0.6 with the bare-description tier.
+      expect(obs.salience).toBe(0.6);
     }
   });
 
@@ -218,9 +222,13 @@ describe('buildSessionPr', () => {
     expect(obs).not.toBeNull();
     expect(obs!.type).toBe('session_pr');
     expect(obs!.factSig).toBe('pr-82.5');
-    // 0.97 — a real PR is the headline of the day, above block_position
-    // (0.95) so it leads on the day it actually happens.
-    expect(obs!.salience).toBe(0.97);
+    // Demoted from 0.97 → 0.62. A bare PR is DESCRIPTION; the hero
+    // wants read + directive (where you are + what to do today). Real
+    // state reads (grinding / block_position:4 / pushing_hard / stall)
+    // lead; PR only wins when nothing more actionable qualifies. The
+    // phrasing always attaches a directive ("hold it; the next jump
+    // waits", "cement the form; don't chase another today").
+    expect(obs!.salience).toBe(0.62);
   });
 
   it('null on equal or lower weight', () => {
@@ -245,7 +253,9 @@ describe('buildConsistency', () => {
     const obs = buildConsistency(12, 14, TODAY);
     expect(obs?.factSig).toBe('consist-12of14');
     expect(obs?.metric).toBe('days14');
-    expect(obs?.salience).toBe(0.7);
+    // Bumped to 0.75 — sits just under the tactical stall (0.85) so
+    // a long streak earns a hero slot ahead of the bare PR/up tier.
+    expect(obs?.salience).toBe(0.75);
   });
 
   it('factSig advances at 13/14 vs 12/14 — re-fires when count climbs', () => {
@@ -281,51 +291,126 @@ describe('buildBlockPosition', () => {
     expect(buildBlockPosition(0, TODAY)).toBeNull();
   });
 
-  it('block_position outranks ordinary progression but NOT a real PR', () => {
-    // Pinned ordering: session_pr (0.97) > block_position (0.95) >
-    // lift_progression:up (0.9). A future tweak that breaks this
-    // contract should fail loudly here.
-    const block = buildBlockPosition(3, TODAY)!;
-    expect(block.salience).toBeGreaterThan(0.9);  // ordinary progression
-    expect(block.salience).toBeGreaterThan(0.8);  // stall
-    expect(block.salience).toBeGreaterThan(0.7);  // consistency / comeback
-    expect(block.salience).toBeGreaterThanOrEqual(0.95);
-    expect(block.salience).toBeLessThan(0.97);    // a real PR still leads
+  it('block_position salience is week-aware: week 4 leads (protective), week 3 is mesocycle framing', () => {
+    // Hero ranking, re-tiered: week 4 (recovery week earned) is a
+    // protective read at 0.95 — leads above bare PR (0.62) / up (0.55).
+    // Week 3 is mesocycle framing at 0.7 — useful context but below
+    // the actionable tier (pushing_hard 0.9, back_on_track 0.88, stall 0.85).
+    const week4 = buildBlockPosition(4, TODAY)!;
+    const week3 = buildBlockPosition(3, TODAY)!;
+    expect(week4.salience).toBe(0.95);
+    expect(week3.salience).toBe(0.7);
+    // Week 4 sits in the protective tier (under grinding 0.96; above
+    // every green-light / tactical / consistency read).
+    expect(week4.salience).toBeGreaterThan(0.9);   // pushing_hard
+    expect(week4.salience).toBeGreaterThan(0.85);  // stall
+    expect(week4.salience).toBeGreaterThan(0.75);  // consistency
+    expect(week4.salience).toBeLessThan(0.96);     // grinding still leads
+    // Week 3 sits below stall + consistency but above comeback (0.65)
+    // and the bare PR/up tier.
+    expect(week3.salience).toBeLessThan(0.75);     // consistency leads
+    expect(week3.salience).toBeGreaterThan(0.65);  // comeback
+    expect(week3.salience).toBeGreaterThan(0.62);  // bare PR
   });
 
-  it('selectTopObservations: session_pr leads block_position on PR day', () => {
-    // The PR was earned TODAY — for that day it must lead the dashboard.
-    const block = buildBlockPosition(3, TODAY)!;
+  it('selectTopObservations: block_position:4 (deload week) leads session_pr', () => {
+    // Re-ranked: the "ease up, recovery is earned" signal leads over a
+    // bare PR description. The PR phrasing carries its directive but the
+    // hero slot belongs to the actionable state read.
+    const week4 = buildBlockPosition(4, TODAY)!;
     const pr: Observation = {
       type: 'session_pr',
       id: 'session_pr:Bench',
       factSig: 'pr-85',
-      salience: 0.97,
+      salience: 0.62,
       eventDate: TODAY,
       lift: 'Bench',
       newKg: 85,
       prevKg: 82.5,
     };
-    const picked = selectTopObservations([pr, block], { recentFactSigs: new Set() });
-    expect(picked[0].type).toBe('session_pr');
+    const picked = selectTopObservations([pr, week4], { recentFactSigs: new Set() });
+    expect(picked[0].type).toBe('block_position');
+    expect((picked[0] as any).blockWeek).toBe(4);
   });
 
-  it('selectTopObservations: block_position leads ordinary lift_progression on non-PR day', () => {
-    const block = buildBlockPosition(3, TODAY)!;
+  it('selectTopObservations: block_position:4 leads ordinary lift_progression:up', () => {
+    const week4 = buildBlockPosition(4, TODAY)!;
     const liftUp: Observation = {
       type: 'lift_progression',
       subtype: 'up',
       id: 'lift_progression:Bench',
       factSig: 'up-85',
-      salience: 0.9,
+      salience: 0.55,
       eventDate: TODAY,
       lift: 'Bench',
       from: 80,
       to: 85,
       span: 3,
     };
-    const picked = selectTopObservations([liftUp, block], { recentFactSigs: new Set() });
+    const picked = selectTopObservations([liftUp, week4], { recentFactSigs: new Set() });
     expect(picked[0].type).toBe('block_position');
+  });
+
+  it('selectTopObservations: tactical stall leads bare lift_progression:up', () => {
+    // The directive "one more rep before adding weight" makes the stall
+    // the more useful hero than a bare "Bench up to 85 kg" description.
+    const stallObs: Observation = {
+      type: 'lift_progression',
+      subtype: 'stall',
+      id: 'lift_progression:Squat',
+      factSig: 'stall-100-3',
+      salience: 0.85,
+      eventDate: TODAY,
+      lift: 'Squat',
+      weight: 100,
+      span: 3,
+    };
+    const upObs: Observation = {
+      type: 'lift_progression',
+      subtype: 'up',
+      id: 'lift_progression:Bench',
+      factSig: 'up-85',
+      salience: 0.55,
+      eventDate: TODAY,
+      lift: 'Bench',
+      from: 80,
+      to: 85,
+      span: 3,
+    };
+    const picked = selectTopObservations([upObs, stallObs], { recentFactSigs: new Set() });
+    expect(picked[0].factSig).toBe('stall-100-3');
+  });
+
+  it('selectTopObservations: consistency leads comeback + bare PR/up', () => {
+    const cons: Observation = {
+      type: 'consistency',
+      id: 'consistency:days14',
+      factSig: 'consist-12of14',
+      salience: 0.75,
+      eventDate: TODAY,
+      metric: 'days14',
+      count: 12,
+    };
+    const cb: Observation = {
+      type: 'comeback',
+      id: 'comeback',
+      factSig: 'gap-3',
+      salience: 0.65,
+      eventDate: TODAY,
+      gapDays: 3,
+    };
+    const pr: Observation = {
+      type: 'session_pr',
+      id: 'session_pr:Bench',
+      factSig: 'pr-90',
+      salience: 0.62,
+      eventDate: TODAY,
+      lift: 'Bench',
+      newKg: 90,
+      prevKg: 85,
+    };
+    const picked = selectTopObservations([cb, pr, cons], { recentFactSigs: new Set() });
+    expect(picked[0].type).toBe('consistency');
   });
 });
 
@@ -565,7 +650,10 @@ describe('buildComeback', () => {
   it('fires at gapDays >= 3 (missed scheduled days, NOT raw calendar)', () => {
     const obs = buildComeback(4, TODAY);
     expect(obs?.factSig).toBe('gap-4');
-    expect(obs?.salience).toBe(1.0);
+    // Demoted from 1.0 → 0.65 in the re-rank: the same-day action
+    // (deload week / pushing_hard / stall) leads over a "back from a
+    // gap" read that doesn't tell the user what to do TODAY.
+    expect(obs?.salience).toBe(0.65);
   });
 
   it('null below threshold — closes the rest-day false-positive', () => {
@@ -659,6 +747,43 @@ describe('buildPlanRationale', () => {
     expect(buildPlanRationale('ppl', 0, 0, TODAY)!.trainingDays).toBe(0);
     expect(buildPlanRationale('ppl', 99, 0, TODAY)!.trainingDays).toBe(7);
     expect(buildPlanRationale('ppl', null, 0, TODAY)!.trainingDays).toBe(0);
+  });
+
+  it('legacy callers without opts keep the bare rationale-${split} factSig', () => {
+    // Pinned: existing dedup history (factSigs already in the message store)
+    // must keep applying when callers don't pass goal/priority. The personal-
+    // isation suffix is appended only when at least one of them is provided.
+    expect(buildPlanRationale('full_body', 3, 0, TODAY)!.factSig).toBe('rationale-full_body');
+    expect(buildPlanRationale('ppl', 3, 0, TODAY, {})!.factSig).toBe('rationale-ppl');
+    expect(
+      buildPlanRationale('ppl', 3, 0, TODAY, { goal: null, priority: null })!.factSig,
+    ).toBe('rationale-ppl');
+  });
+
+  it('factSig advances when goal or priority is provided', () => {
+    // A returning user who edits onboarding (e.g. flips priority from "bench"
+    // to "squat") must re-hear the rationale for the new combination instead
+    // of being permanently deduped on the prior sig.
+    const a = buildPlanRationale('ppl', 3, 0, TODAY, { goal: 'strength' })!;
+    const b = buildPlanRationale('ppl', 3, 0, TODAY, { goal: 'muscle' })!;
+    const c = buildPlanRationale('ppl', 3, 0, TODAY, { goal: 'strength', priority: 'bench' })!;
+    const d = buildPlanRationale('ppl', 3, 0, TODAY, { goal: 'strength', priority: 'squat' })!;
+    expect(a.factSig).not.toBe(b.factSig);
+    expect(a.factSig).not.toBe(c.factSig);
+    expect(c.factSig).not.toBe(d.factSig);
+  });
+
+  it('lowercases priority so case differences do not produce duplicate sigs', () => {
+    const a = buildPlanRationale('ppl', 3, 0, TODAY, { priority: 'Bench' })!;
+    const b = buildPlanRationale('ppl', 3, 0, TODAY, { priority: 'bench' })!;
+    expect(a.factSig).toBe(b.factSig);
+    expect(a.priority).toBe('bench');
+  });
+
+  it('persists goal + priority on the observation for the phraser', () => {
+    const obs = buildPlanRationale('full_body', 1, 0, TODAY, { goal: 'muscle', priority: 'legs' })!;
+    expect(obs.goal).toBe('muscle');
+    expect(obs.priority).toBe('legs');
   });
 });
 
@@ -770,26 +895,18 @@ describe('deriveObservations', () => {
 
 describe('selectTopObservations', () => {
   function obsFixture(): Observation[] {
+    // Salience values mirror the production constants. Stall (0.85) leads
+    // the fixture under the new ranking; up (0.55) drops to bare-description
+    // tier; consistency (0.75) sits between them; briefing_fallback is the
+    // empty-day baseline.
     return [
-      {
-        type: 'lift_progression',
-        subtype: 'up',
-        id: 'lift_progression:Bench',
-        factSig: 'up-85',
-        salience: 0.9,
-        eventDate: '2026-06-08',
-        lift: 'Bench',
-        from: 80,
-        to: 85,
-        span: 3,
-      },
       {
         type: 'lift_progression',
         subtype: 'stall',
         id: 'lift_progression:Squat',
         factSig: 'stall-100-3',
-        salience: 0.8,
-        eventDate: '2026-06-05',
+        salience: 0.85,
+        eventDate: '2026-06-08',
         lift: 'Squat',
         weight: 100,
         span: 3,
@@ -798,10 +915,22 @@ describe('selectTopObservations', () => {
         type: 'consistency',
         id: 'consistency:days14',
         factSig: 'consist-12of14',
-        salience: 0.7,
+        salience: 0.75,
         eventDate: TODAY,
         metric: 'days14',
         count: 12,
+      },
+      {
+        type: 'lift_progression',
+        subtype: 'up',
+        id: 'lift_progression:Bench',
+        factSig: 'up-85',
+        salience: 0.55,
+        eventDate: '2026-06-08',
+        lift: 'Bench',
+        from: 80,
+        to: 85,
+        span: 3,
       },
       {
         type: 'briefing_fallback',
@@ -817,22 +946,23 @@ describe('selectTopObservations', () => {
 
   it('drops factSigs already in recent memory (the dedup guard)', () => {
     const picked = selectTopObservations(obsFixture(), {
-      recentFactSigs: new Set(['up-85']),
+      recentFactSigs: new Set(['stall-100-3']),
     });
-    expect(picked.find(o => o.factSig === 'up-85')).toBeUndefined();
-    // Stall is now the headline; salience 0.8 → also qualifies for a 2nd slot.
-    expect(picked[0].factSig).toBe('stall-100-3');
+    expect(picked.find(o => o.factSig === 'stall-100-3')).toBeUndefined();
+    // Stall is gone → consistency leads (0.75); up (0.55) and the fallback
+    // sit below the 2nd-slot floor (0.8).
+    expect(picked[0].factSig).toBe('consist-12of14');
   });
 
   it('admits a fact whose factSig advanced past the recent set', () => {
-    // up-85 was spoken yesterday; today's up-87.5 must speak.
+    // stall-100-3 was spoken yesterday; today's stall-100-4 must speak.
     const today = obsFixture().map(o =>
-      o.factSig === 'up-85' ? { ...o, factSig: 'up-87.5', to: 87.5 } as any : o,
+      o.factSig === 'stall-100-3' ? { ...o, factSig: 'stall-100-4', span: 4 } as any : o,
     );
     const picked = selectTopObservations(today, {
-      recentFactSigs: new Set(['up-85']),
+      recentFactSigs: new Set(['stall-100-3']),
     });
-    expect(picked[0].factSig).toBe('up-87.5');
+    expect(picked[0].factSig).toBe('stall-100-4');
   });
 
   it('honors the 0.3 salience floor', () => {
@@ -884,11 +1014,14 @@ describe('selectTopObservations', () => {
   });
 
   it('a PR on a rest day still outranks the rest_day baseline (real signal leads)', () => {
+    // PR (0.62) is now in the bare-description tier, but still well above
+    // the rest_day filler (0.1). Any real signal — even the demoted PR —
+    // wins the slot.
     const pr: Observation = {
       type: 'session_pr',
       id: 'session_pr:Bench',
       factSig: 'pr-90',
-      salience: 0.97,
+      salience: 0.62,
       eventDate: TODAY,
       lift: 'Bench',
       newKg: 90,
@@ -909,38 +1042,66 @@ describe('selectTopObservations', () => {
   });
 
   it('grants a 2nd slot only at salience >= 0.8', () => {
+    // First slot is the protective deload-week read (0.95). Consistency
+    // (0.75) sits below the 2nd-slot floor (0.8), so only one slot fires.
     const obs: Observation[] = [
       {
-        type: 'lift_progression',
-        subtype: 'up',
-        id: 'A',
-        factSig: 'up-100',
-        salience: 0.9,
+        type: 'block_position',
+        id: 'block_position:4',
+        factSig: 'block-4',
+        salience: 0.95,
         eventDate: TODAY,
-        lift: 'A',
-        from: 90,
-        to: 100,
-        span: 2,
+        blockWeek: 4,
       },
       {
         type: 'consistency',
         id: 'consistency:days14',
         factSig: 'consist-12of14',
-        salience: 0.7, // < 0.8 → does NOT earn a slot
+        salience: 0.75, // < 0.8 → does NOT earn a slot
         eventDate: TODAY,
         metric: 'days14',
         count: 12,
       },
     ];
     const picked = selectTopObservations(obs, { recentFactSigs: new Set() });
-    expect(picked.map(o => o.factSig)).toEqual(['up-100']);
+    expect(picked.map(o => o.factSig)).toEqual(['block-4']);
   });
 
   it('admits a 2nd slot when its salience >= 0.8', () => {
+    // Stall (0.85) leads the fixture and qualifies for the second slot
+    // too if no other 0.8+ observation existed; here only one ≥0.8 obs
+    // exists, so the result is just [stall].
     const picked = selectTopObservations(obsFixture(), {
       recentFactSigs: new Set(),
     });
-    expect(picked.map(o => o.factSig)).toEqual(['up-85', 'stall-100-3']);
+    expect(picked.map(o => o.factSig)).toEqual(['stall-100-3']);
+  });
+
+  it('grants a 2nd slot to a second observation at salience >= 0.8', () => {
+    // Two strong reads co-occur: the deload-week protective read and a
+    // tactical stall. Both clear the 2nd-slot floor (0.8); deload leads,
+    // stall takes the second slot.
+    const stall: Observation = {
+      type: 'lift_progression',
+      subtype: 'stall',
+      id: 'lift_progression:Squat',
+      factSig: 'stall-100-3',
+      salience: 0.85,
+      eventDate: TODAY,
+      lift: 'Squat',
+      weight: 100,
+      span: 3,
+    };
+    const week4: Observation = {
+      type: 'block_position',
+      id: 'block_position:4',
+      factSig: 'block-4',
+      salience: 0.95,
+      eventDate: TODAY,
+      blockWeek: 4,
+    };
+    const picked = selectTopObservations([stall, week4], { recentFactSigs: new Set() });
+    expect(picked.map(o => o.factSig)).toEqual(['block-4', 'stall-100-3']);
   });
 
   it('tie-breaks by eventDate desc, then id asc', () => {
@@ -986,7 +1147,9 @@ describe('buildPushingHard', () => {
     expect(obs!.type).toBe('pushing_hard');
     expect(obs!.fatigue).toBe('low_energy');
     expect(obs!.lift).toBe('Bench');
-    expect(obs!.salience).toBe(0.92);
+    // Green-light tier (0.9). Sits just below the protective reads
+    // (grinding 0.96, block_position:4 0.95) and above back_on_track.
+    expect(obs!.salience).toBe(0.9);
     expect(obs!.factSig).toBe('pushing-85-low_energy');
     expect(obs!.subsumes).toContain('lift_progression:Bench');
   });
@@ -1025,7 +1188,10 @@ describe('buildGrinding', () => {
     expect(obs!.type).toBe('grinding');
     expect(obs!.strain).toBe('stall');
     expect(obs!.lift).toBe('Squat');
-    expect(obs!.salience).toBe(0.88);
+    // Promoted to 0.96 — the lead protective read (ahead of block_position:4
+    // 0.95). A grinding stall + repeated low energy IS the hero of the day
+    // when it fires.
+    expect(obs!.salience).toBe(0.96);
     expect(obs!.subsumes).toEqual(['lift_progression:Squat']);
   });
 
@@ -1052,7 +1218,8 @@ describe('buildBackOnTrack', () => {
     expect(obs).not.toBeNull();
     expect(obs!.type).toBe('back_on_track');
     expect(obs!.lift).toBe('Bench');
-    expect(obs!.salience).toBe(0.9);
+    // Green-light tier, just under pushing_hard (0.9).
+    expect(obs!.salience).toBe(0.88);
     expect([...obs!.subsumes].sort()).toEqual(['comeback', 'lift_progression:Bench']);
   });
 
@@ -1073,13 +1240,15 @@ describe('isCompositeObservation', () => {
 // ── Selector prefers the synthesis over its component single-facts ─────
 
 describe('selectTopObservations — composite preference', () => {
+  // Salience values mirror production: up (bare description) 0.55,
+  // pushing_hard (green-light synthesis) 0.9.
   const benchUp: CoachObservation = {
     type: 'lift_progression', subtype: 'up', id: 'lift_progression:Bench',
-    factSig: 'up-85', salience: 0.9, eventDate: TODAY, lift: 'Bench', from: 80, to: 85, span: 3,
+    factSig: 'up-85', salience: 0.55, eventDate: TODAY, lift: 'Bench', from: 80, to: 85, span: 3,
   };
   const pushingHard: CoachObservation = {
     type: 'pushing_hard', id: 'pushing_hard', factSig: 'pushing-85-low_energy',
-    salience: 0.92, eventDate: TODAY, lift: 'Bench', fatigue: 'low_energy',
+    salience: 0.9, eventDate: TODAY, lift: 'Bench', fatigue: 'low_energy',
     subsumes: ['lift_progression:Bench'],
   };
 
@@ -1090,11 +1259,13 @@ describe('selectTopObservations — composite preference', () => {
   });
 
   it('a 2nd slot may still go to a NON-subsumed strong fact (complementary, not the part)', () => {
-    const block: CoachObservation = {
-      type: 'block_position', id: 'block_position:3', factSig: 'block-3',
-      salience: 0.95, eventDate: TODAY, blockWeek: 3,
+    // Deload-week protective read (0.95) leads; pushing_hard (0.9) takes
+    // the second slot. The bare 'up' fact is subsumed and dropped.
+    const week4: CoachObservation = {
+      type: 'block_position', id: 'block_position:4', factSig: 'block-4',
+      salience: 0.95, eventDate: TODAY, blockWeek: 4,
     };
-    const picked = selectTopObservations([benchUp, pushingHard, block], { recentFactSigs: new Set() });
+    const picked = selectTopObservations([benchUp, pushingHard, week4], { recentFactSigs: new Set() });
     expect(picked.map(o => o.type)).toEqual(['block_position', 'pushing_hard']);
     expect(picked.find(o => o.factSig === 'up-85')).toBeUndefined();
   });
@@ -1217,27 +1388,31 @@ describe('cold-start sequencing — calibration → plan_rationale → real obs'
     expect(picked[0].type).toBe('briefing_fallback');
   });
 
-  it('once a 0.9 observation exists, both cold-starts are outranked even if still eligible', () => {
+  it('once a hero-tier observation exists, both cold-starts are outranked even if still eligible', () => {
     // User is still inside both windows (< 6 sessions, < 14 days) but has
-    // a Bench up-85 today. The real observation takes the headline; the
-    // cold-starts don't appear in `picked`.
+    // a Squat stall today (tactical tier, 0.85). The real observation takes
+    // the headline; the cold-starts (0.6 / 0.55) don't appear in `picked`.
+    // Bare lift_progression:up (0.55) sits BELOW the cold-starts, so the
+    // test deliberately uses a stall — the read+directive line that beats
+    // the bare description in the new ranking.
     const obs = deriveObservations(
       newUserInput({
         firstSessionDaysAgo: 7,
         totalCompleted: 5,
         liftSessions: {
-          Bench: [
-            { topKg: 80, date: '2026-06-03' },
-            { topKg: 82.5, date: '2026-06-06' },
-            { topKg: 85, date: '2026-06-08' },
+          Squat: [
+            { topKg: 100, date: '2026-06-02' },
+            { topKg: 100, date: '2026-06-06' },
+            { topKg: 100, date: '2026-06-09' },
           ],
         },
       }),
     );
     const picked = selectTopObservations(obs, { recentFactSigs: new Set() });
-    // Headline is the 0.9 lift_progression up; cold-starts and fallback
-    // never reach the user.
+    // Headline is the 0.85 stall ("one more rep before adding weight");
+    // cold-starts and fallback never reach the user.
     expect(picked[0].type).toBe('lift_progression');
+    expect((picked[0] as any).subtype).toBe('stall');
     expect(picked.find(p => p.type === 'calibration')).toBeUndefined();
     expect(picked.find(p => p.type === 'plan_rationale')).toBeUndefined();
   });

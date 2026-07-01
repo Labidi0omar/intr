@@ -46,6 +46,7 @@ import {
   buildFallbackRecap,
   produceRecapMessage,
   requestCoachRecap,
+  sanitizeRecap,
   withTimeout,
   type BuildCoachRecapContextArgs,
   type CoachRecapContext,
@@ -350,6 +351,53 @@ describe('buildFallbackRecap — always non-empty', () => {
 });
 
 // ── 5. Request payload + silent failure (existing contract) ────────────
+
+// ── 5a. sanitizeRecap (defense-in-depth client validator) ──────────────
+
+describe('sanitizeRecap — client-side recap validator', () => {
+  it('passes a clean recap through unchanged', () => {
+    const msg = 'PR on bench — 82.5 kg. Trajectory is sharp.';
+    expect(sanitizeRecap(msg)).toBe(msg);
+  });
+
+  it('trims surrounding whitespace', () => {
+    expect(sanitizeRecap('  Clean session.  ')).toBe('Clean session.');
+  });
+
+  it('rejects null / undefined / non-string', () => {
+    expect(sanitizeRecap(null)).toBeNull();
+    expect(sanitizeRecap(undefined)).toBeNull();
+    expect(sanitizeRecap(42 as unknown as string)).toBeNull();
+  });
+
+  it('rejects empty / whitespace-only', () => {
+    expect(sanitizeRecap('')).toBeNull();
+    expect(sanitizeRecap('   ')).toBeNull();
+  });
+
+  it('truncates over 280 chars instead of rejecting (layout-safe)', () => {
+    const long = 'A'.repeat(350);
+    const result = sanitizeRecap(long);
+    expect(result).not.toBeNull();
+    expect(result!.length).toBe(280);
+  });
+
+  it('rejects medical / injury advice keywords', () => {
+    expect(sanitizeRecap('Great session. See a physio if it hurts.')).toBeNull();
+    expect(sanitizeRecap('Push done. Rest tomorrow and ice it.')).toBeNull();
+    expect(sanitizeRecap('Eat 200 grams of protein today.')).toBeNull();
+    expect(sanitizeRecap('If injured, stop and see a doctor.')).toBeNull();
+  });
+
+  it('rejects emoji', () => {
+    expect(sanitizeRecap('PR on bench 🔥 82.5 kg.')).toBeNull();
+  });
+
+  it('accepts exclamation marks (v3: warmer voice)', () => {
+    const msg = 'Squat PR at 100 kg — that\'s a real one!';
+    expect(sanitizeRecap(msg)).toBe(msg);
+  });
+});
 
 describe('requestCoachRecap — request payload shape', () => {
   it('invokes "coach-recap" with the full enriched context as the body', async () => {

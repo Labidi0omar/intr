@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<!--
+  Landing page for Intr's legal documents. Host this whole folder (index.html,
+  privacy-policy.html, terms-of-use.html) at a public, non-PDF URL — e.g. GitHub Pages.
+  The Privacy Policy URL you give Google Play should point to privacy-policy.html.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Intr — Legal</title>
+<style>
+  :root { --bg: #070708; --card: #141418; --text: #f2f2f4; --muted: #9a9aa2; --accent: #2dd4bf; --border: #26262c; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text);
+         margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .wrap { max-width: 480px; width: 100%; text-align: center; }
+  h1 { font-size: 2.2rem; margin: 0 0 4px; letter-spacing: -0.02em; }
+  .tag { color: var(--muted); margin: 0 0 32px; font-size: 0.95rem; }
+  a.card { display: block; text-decoration: none; color: var(--text); background: var(--card);
+           border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px; margin: 12px 0; text-align: left;
+           transition: border-color .15s ease, transform .15s ease; }
+  a.card:hover { border-color: var(--accent); transform: translateY(-1px); }
+  a.card .t { font-size: 1.1rem; font-weight: 600; }
+  a.card .d { color: var(--muted); font-size: 0.9rem; margin-top: 4px; }
+  a.card .arrow { float: right; color: var(--accent); font-size: 1.2rem; }
+  footer { color: var(--muted); font-size: 0.8rem; margin-top: 28px; }
+  footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Intr</h1>
+  <p class="tag">Legal &amp; privacy documents</p>
+
+  <a class="card" href="privacy-policy.html">
+    <span class="arrow">→</span>
+    <div class="t">Privacy Policy</div>
+    <div class="d">What data Intr collects, how it's used, and your rights.</div>
+  </a>
+
+  <a class="card" href="terms-of-use.html">
+    <span class="arrow">→</span>
+    <div class="t">Terms of Use</div>
+    <div class="d">The agreement governing your use of Intr, including health &amp; safety.</div>
+  </a>
+
+  <a class="card" href="account-deletion.html">
+    <span class="arrow">→</span>
+    <div class="t">Account &amp; Data Deletion</div>
+    <div class="d">How to request deletion of your account and what data is removed.</div>
+  </a>
+
+  <footer>
+    © 2026 Omar Labidi · <a href="mailto:labidiomar04@gmail.com">labidiomar04@gmail.com</a>
+  </footer>
+</div>
+</body>
+</html>

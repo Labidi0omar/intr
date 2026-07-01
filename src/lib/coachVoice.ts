@@ -6,10 +6,13 @@
 // line every time, and across-fact variety lands by hash diffusion rather
 // than per-call randomness. No Math.random, no Date.now, no AsyncStorage.
 //
-// TONE: terse, declarative, serious-lifter. No emoji, no exclamation
-// cheerleading; praise is earned and stated flat ("Bench up three sessions:
-// 80, 82.5, 85." not "Great job!"). If a line ever reads as a hype-bot, the
-// pool is wrong — replace the entry, don't add an exclamation.
+// TONE: a friend who trains seriously and gives a shit. Dry humor, honest,
+// never cheers, never sounds like a status report. Praise is earned and
+// stated flat ("Bench up three sessions: 80, 82.5, 85." not "Great job!").
+// Occasional rhetorical questions are fine — they make the coach sound
+// like a person, not a state machine. Warmth lives in noticing the right
+// thing, not in the adjectives. If a line reads as a hype-bot or a
+// corporate status update, the pool is wrong — replace the entry.
 //
 // STAGE 3 will replace or wrap this function with an AI phraser. The
 // signature is `(obs: Observation) => string` — same in, same out — so the
@@ -55,175 +58,386 @@ function pctInt(p: number): string {
 }
 
 // ── Phrase pools ───────────────────────────────────────────────────────
-// Three to five entries per slot. Add entries freely — adding does not
-// change which line an EXISTING factSig picks (the modulo only re-spreads
-// at the boundary, not retroactively). Removing or reordering DOES shift
-// picks; do not reorder once a pool has shipped to users without a deload
-// in voice continuity expectations.
+// HERO INVARIANTS (the dashboard signature surfaces ONE line):
+//   1. ≤ 130 chars per line, even at the largest realistic interpolation.
+//   2. Every line carries a forward beat — state of play AND what to do
+//      today. The beat can be an imperative ("get one more rep"), a
+//      rhetorical question ("ready to chase it?"), or an implicit
+//      directive ("the break comes from reps, not weight"). Pure
+//      description ("Bench hit a new high") with no forward-looking cue
+//      is rejected by the test.
+//   3. No emoji, no "deload"/"mesocycle"/insider jargon. Exclamation
+//      marks are allowed on genuine milestones (PRs, new highs, streaks)
+//      but never on ordinary reads — cheerleading erodes trust.
+//
+// Add entries freely — adding does not change which line an EXISTING
+// factSig picks (the modulo only re-spreads at the boundary, not
+// retroactively). Removing or reordering DOES shift picks; do not reorder
+// once a pool has shipped to users without a continuity break.
 
 const LIFT_UP_POOL: readonly ((lift: string, from: number, to: number, span: number) => string)[] = [
-  (lift, from, to, span) => `${lift} is moving — ${kg(from)} to ${kg(to)} kg over your last ${span} sessions.`,
-  (lift, from, to, span) => `${lift}'s climbing. Up to ${kg(to)} kg now from ${kg(from)}, ${span} sessions running.`,
-  (lift, from, to, span) => `Good trend on ${lift}: ${kg(from)} to ${kg(to)} kg across ${span} sessions.`,
-  (lift, from, to) => `${lift} keeps going up — ${kg(to)} kg now, started at ${kg(from)}.`,
+  (lift, _from, to) => `${lift} up to ${kg(to)} kg. Build the rep before the weight today — the arc is doing the work.`,
+  (lift, _from, to) => `${lift} keeps moving — ${kg(to)} kg now. Don't rush the next jump; let this one settle.`,
+  (lift, _from, to) => `${lift}'s on a run at ${kg(to)} kg. Same load today, sharper reps. The number follows the form.`,
+  (lift, _from, to) => `${lift} climbing to ${kg(to)} kg. Today's job is clean reps, not a test.`,
+  (lift, _from, to) => `${kg(to)} kg on ${lift} — that's the new working weight. Hit it clean, don't chase the next one yet.`,
+  (lift, _from, to) => `${lift} keeps ticking up: ${kg(to)} kg now. Show up, make the reps honest, let the trend run.`,
+  (lift, _from, to) => `${lift} at ${kg(to)} kg and still climbing. The form has to carry the weight — don't let it slip today.`,
+  (lift, _from, to) => `Another step on ${lift} — ${kg(to)} kg. The rep quality is what keeps this going. Protect it today.`,
 ];
 
-// New-high variant of the up arc — the latest top is the highest on record in
-// the window. References the streak (span sessions) AND the new best, so the
-// line connects the run to the milestone instead of "bench up 5 kg".
+// New-high variant — milestone read with a directive that protects the gain.
+// Each entry references the latest top weight AND a /new (high|top|best)/
+// phrase (the test pins this). Exclamation is allowed on a genuine new high.
 const LIFT_UP_HIGH_POOL: readonly ((lift: string, from: number, to: number, span: number) => string)[] = [
-  (lift, _from, to, span) => `${lift} just hit a new high — ${kg(to)} kg, ${span} sessions of steady gains.`,
-  (lift, from, to, span) => `New top on ${lift}: ${kg(to)} kg. That's ${span} sessions climbing straight, ${kg(from)} to ${kg(to)}.`,
-  (lift, _from, to, span) => `${lift} has climbed ${span} sessions straight to a new best — ${kg(to)} kg.`,
+  (lift, _from, to) => `${lift} hit a new top — ${kg(to)} kg! Cement the form today; don't chase another this week.`,
+  (lift, _from, to) => `New high on ${lift}: ${kg(to)} kg. Today's job is clean reps at last week's load — bank the win.`,
+  (lift, _from, to) => `${lift} at ${kg(to)} kg, a new best. Lock it in today, then push next time. Don't rush it.`,
+  (lift, _from, to) => `${lift} just hit ${kg(to)} kg — a new high. Hold the load today, make every rep count.`,
+  (lift, _from, to) => `New top on ${lift}: ${kg(to)} kg. The gain sticks when you don't chase another one today.`,
+  (lift, _from, to) => `${lift} broke through to a new top — ${kg(to)} kg. Cement it with clean reps today.`,
+  (lift, _from, to) => `${kg(to)} kg on ${lift} — your new best. The smart move today is hold the load and own the reps.`,
+  (lift, _from, to) => `New high: ${lift} at ${kg(to)} kg. Don't add weight today — let the body absorb it first.`,
 ];
 
 const LIFT_STALL_POOL: readonly ((lift: string, weight: number, span: number) => string)[] = [
-  (lift, weight, span) => `${lift} has been stuck at ${kg(weight)} kg for ${span} sessions. Next time, push for one more rep or nudge the weight up.`,
-  (lift, weight, span) => `${lift}'s stalled — same ${kg(weight)} kg ${span} sessions running. Break it: one more rep, or a lighter week and rebuild.`,
-  (lift, weight, span) => `No movement on ${lift} in ${span} sessions, still ${kg(weight)} kg. Force the issue next time.`,
+  (lift, weight, span) => `${lift} stuck at ${kg(weight)} kg for ${span} sessions. Don't add weight — get one more rep today.`,
+  (lift, weight, span) => `${kg(weight)} kg has been the wall on ${lift} for ${span} sessions. That's a checkpoint, not a plateau. Chase the rep.`,
+  (lift, weight, span) => `${lift} hasn't moved in ${span} sessions, still ${kg(weight)} kg. The break comes from reps, not weight. Push for one more.`,
+  (lift, weight, span) => `${lift} stalled at ${kg(weight)} kg, ${span} sessions running. Hold the load, hunt the extra rep. It'll break.`,
+  (lift, weight, span) => `${span} sessions at ${kg(weight)} kg on ${lift}. Weight isn't the lever right now — rep quality is. Make today's set count.`,
+  (lift, weight, span) => `${lift} parked at ${kg(weight)} kg for ${span} sessions. That's not failure — it's the body learning. Force one extra rep today.`,
+  (lift, weight, span) => `Still at ${kg(weight)} kg on ${lift} after ${span} sessions. Don't chase the number — chase a cleaner set today. The weight follows.`,
+  (lift, weight, span) => `${lift}'s been sitting at ${kg(weight)} kg. The stall breaks when you own the rep, not when you add the plate. Get one more.`,
 ];
 
 const LIFT_COMEBACK_POOL: readonly ((lift: string, days: number) => string)[] = [
-  (lift, days) => `First time back on ${lift} in ${days} days. Start a touch under your old top set and build up.`,
-  (lift, days) => `${lift}'s been on ice for ${days} days. Ease in — don't chase your old number today.`,
-  (lift, days) => `${days} days since your last ${lift}. Find the groove before you load it heavy.`,
+  (lift, days) => `First ${lift} in ${days} days. Start a touch under your old top — the groove comes back before the weight does.`,
+  (lift, days) => `${lift}'s been on ice ${days} days. Ease back in; don't chase the old number. Find the rhythm first.`,
+  (lift, days) => `${days} days off ${lift}. The form is still in there — let it show up before you load it up.`,
+  (lift, days) => `Back on ${lift} after ${days} days. The smart move: drop 10%, own every rep, trust the comeback.`,
+  (lift, days) => `${lift} again after ${days} days off. The numbers will be there next week — today is about showing up.`,
+  (lift, days) => `${days} days since you touched ${lift}. Don't prove anything today — just find the groove and load it honest.`,
+  (lift, days) => `Welcome back to ${lift} — ${days} days off. The strength returns faster than it left. Start light, move clean.`,
+  (lift, days) => `First ${lift} in a while (${days} days). The body remembers; let it. Don't force the old top set today.`,
 ];
 
 const SESSION_PR_POOL: readonly ((lift: string, newKg: number, prevKg: number) => string)[] = [
-  (lift, newKg, prevKg) => `New best on ${lift} — ${kg(newKg)} kg, past your old ${kg(prevKg)}.`,
-  (lift, newKg, prevKg) => `${lift} PR: ${kg(newKg)} kg. Beat your previous ${kg(prevKg)}.`,
-  (lift, newKg, prevKg) => `That's a ${lift} record — ${kg(newKg)} kg, up from ${kg(prevKg)}.`,
+  (lift, newKg, prevKg) => `${lift} PR — ${kg(newKg)} kg, past ${kg(prevKg)}! Take the win; don't chase another one today.`,
+  (lift, newKg, prevKg) => `New best on ${lift}: ${kg(newKg)} kg (was ${kg(prevKg)}). Bank it — the next jump waits for clean reps.`,
+  (lift, newKg, prevKg) => `${lift} record at ${kg(newKg)} kg, beating ${kg(prevKg)}. Hold it today; let the body catch the number.`,
+  (lift, newKg, prevKg) => `${lift} PR! ${kg(newKg)} kg, up from ${kg(prevKg)}. The smart move: same load next time, own the reps.`,
+  (lift, newKg, prevKg) => `${kg(newKg)} kg on ${lift} — a new best, past ${kg(prevKg)}. Don't push for another today; cement this one.`,
+  (lift, newKg, prevKg) => `PR on ${lift}: ${kg(newKg)} kg (was ${kg(prevKg)}). That's the work paying off. Hold the load, sharpen the rep.`,
+  (lift, newKg, prevKg) => `${lift} just hit ${kg(newKg)} kg — new record, past ${kg(prevKg)}. Take it. The next jump isn't today.`,
+  (lift, newKg, prevKg) => `New top on ${lift}: ${kg(newKg)} kg, beating ${kg(prevKg)}. Real progress. Now lock it in with a clean session.`,
 ];
 
 const CONSISTENCY_POOL: readonly ((count: number, denom: number) => string)[] = [
-  (count, denom) => `${count} of the last ${denom} days in the gym. That consistency is what moves the needle.`,
-  (count, denom) => `${count} sessions in ${denom} days. This is the part most people skip — keep it up.`,
-  (count, denom) => `${count} of ${denom} days trained. Showing up is the whole game.`,
+  (count, denom) => `${count} of last ${denom} days in. That's the work — keep showing up.`,
+  (count, denom) => `${count} of ${denom} days trained. Don't miss today — the trend is the whole game.`,
+  (count, denom) => `${count} sessions in ${denom} days. Cadence is the lever. Pull it again today.`,
+  (count, denom) => `${count}/${denom} days. That's not luck, that's habit. Show up again — it compounds.`,
+  (count, denom) => `${count} of ${denom}. The streak doesn't care about motivation; it cares about today. Show up.`,
+  (count, denom) => `You've trained ${count} of the last ${denom} days. The body is paying attention. Don't break the pattern today.`,
+  (count, denom) => `${count} sessions, ${denom} days. That's how it's done — one more today and the month looks different.`,
+  (count, denom) => `Consistency at ${count}/${denom} days. The numbers move when the habit does. Keep it going today.`,
 ];
 
-// "Block" / "deload" are coach-speak. We use plain language: a 4-week
-// cycle of three building weeks plus one lighter recovery week. The third
-// week is the last hard push; the fourth is intentionally light so the
-// body absorbs the work.
+// Mesocycle framing — plain language. The 4-week cycle: three building
+// weeks, one lighter recovery week. Week 3 is the last hard push; week 4
+// is intentionally light. Avoid "deload" / "mesocycle" / "block week"
+// (pinned by tests; users don't know the jargon).
 const BLOCK_WEEK3_POOL: readonly string[] = [
-  `Third hard week — give it everything, then you've earned a lighter one.`,
-  `You're at the top of the build. One more heavy week, then we back off to recover.`,
-  `Last hard week of this stretch. Push now; the easy week is coming.`,
+  `Week 3 — last hard build before you back off. Make it count today.`,
+  `Top of the build, third hard week. Push now; the easy one's coming.`,
+  `Last heavy week in this run. Empty the tank; recovery's next.`,
+  `Week 3 of 4 — the peak of the build. This is where the work lands. Go hard today.`,
+  `Third week in. The body's carrying real fatigue — push through today, the back-off is earned.`,
+  `Final hard week before the reset. Don't hold back today; this is the session that counts.`,
+  `Week 3. The heaviest of the build. Show up full — recovery week gives you the runway to empty it.`,
+  `Last push before the easy week. Today's session is the one you'll feel next month. Make it honest.`,
 ];
 
 const BLOCK_WEEK4_POOL: readonly string[] = [
-  `Easy week. Go lighter on purpose — this is when the last three weeks actually pay off.`,
-  `Recovery week. Keep it light and let your body catch up; you come back stronger.`,
-  `This one's meant to be easy. Light loads, clean reps, no grinding.`,
+  `Recovery week. Go lighter on purpose — that's where the work sticks.`,
+  `Easy week by design. Keep loads light and reps clean today.`,
+  `Back-off week — let the body catch up. Light loads, clean reps.`,
+  `Recovery week. The gains from the last three weeks land now. Go light, move well.`,
+  `Week 4 — the reset. Don't fight it. Light loads, honest reps, let the body absorb the build.`,
+  `This is the easy week. It's not a skip — it's where the progress gets stored. Go light today.`,
+  `Back-off by design. The weight drops, the reps stay clean. Don't add plates today.`,
+  `Recovery week. The smart lifters treat this one as seriously as the heavy ones. Go light, move honest.`,
 ];
 
-// Effort zone — plain language. The idea: hard sets should be close to
-// failure (where strength + size are built); if they're consistently easy,
-// the loads are too light to drive progress. We avoid "RIR" (reps in
-// reserve) entirely — most users don't know the term and the number alone
-// communicates the same thing.
+// Effort zone — plain language. Hard sets should be close to failure;
+// when they're consistently easy, the loads are too light. We avoid "RIR"
+// (insider jargon — pinned by tests).
 const EFFORT_HIGH_POOL: readonly ((pct: number) => string)[] = [
-  (pct) => `Most of your hard sets are ending close to failure (${pctInt(pct)}%). That's exactly where muscle gets built — keep it there.`,
-  (pct) => `You're taking ${pctInt(pct)}% of your top sets near the limit. That's honest effort — don't ease up.`,
-  () => `Your hard sets are landing right where they should — pushed close to the limit. Stay there.`,
+  (pct) => `Hard sets landing close to failure (${pctInt(pct)}%). That's the growth zone — stay there today.`,
+  (pct) => `${pctInt(pct)}% of top sets near the limit. Good — that's where the work lives. Don't ease off today.`,
+  (pct) => `Effort dialed in: ${pctInt(pct)}% of sets close to failure. Keep the same approach today.`,
+  (pct) => `${pctInt(pct)}% of your hard sets in the right zone. That's not common — keep it there today.`,
+  (pct) => `Most of your sets are landing near the limit (${pctInt(pct)}%). Stay honest with the effort today.`,
+  (pct) => `${pctInt(pct)}% in the growth zone. The body responds to this kind of effort — bring it again today.`,
+  (pct) => `Effort's on point — ${pctInt(pct)}% near failure. The sets that matter are the ones close to the edge. Stay there.`,
+  (pct) => `${pctInt(pct)}% of hard sets in the right spot. That's the signal. Don't drift easy today.`,
 ];
 
 const EFFORT_LOW_POOL: readonly ((pct: number) => string)[] = [
-  (pct) => `Your hard sets are stopping too early — only ${pctInt(pct)}% get near the limit. Add weight or grind out a couple more reps.`,
-  () => `You're leaving too much in the tank. Take your top sets closer to failure next time.`,
-  () => `The loads are playing it safe. Add a bit of weight and make those sets count.`,
+  (pct) => `Hard sets stopping early (${pctInt(pct)}%). There's more in the tank — add weight or chase another rep today.`,
+  (pct) => `Only ${pctInt(pct)}% near the limit. Too much left after each set. Push closer to the edge today.`,
+  (pct) => `Loads playing it safe (${pctInt(pct)}% in zone). The growth is past where you're stopping. Go heavier today.`,
+  (pct) => `${pctInt(pct)}% of sets near failure — the rest had reps left. Today: push the top sets closer to the limit.`,
+  (pct) => `You're stopping short (${pctInt(pct)}% in zone). The bar should feel heavy by the last rep. Add weight or chase a rep.`,
+  (pct) => `Effort's drifting easy — only ${pctInt(pct)}% near the limit. The work starts where comfort ends. Push today.`,
+  (pct) => `${pctInt(pct)}% in the zone. The rest is wasted volume. Make the hard sets actually hard today.`,
+  (pct) => `Playing it safe at ${pctInt(pct)}% in zone. That's maintenance, not growth. Add weight or get another rep today.`,
 ];
 
-// "Dialed in" — the autoregulator is visibly working for the user. Use
-// the real hits/total numbers so the line reads as evidence, not flattery.
-// No exclamation, no hype; the data IS the praise.
+// Dialed in — the autoregulator is working. Reference the real (hits,
+// total) so the line reads as evidence, not flattery. Test pins "tuned to
+// you | dialed in | reading you right" appears in the rotation.
 const DIALED_IN_POOL: readonly ((hits: number, total: number) => string)[] = [
-  (hits, total) => `${hits} of your last ${total} sets hit the 1–2 RIR sweet spot — the engine's tuned to you.`,
-  (hits, total) => `${hits} out of ${total} top sets in the 1–2 RIR target zone. The plan is reading you right.`,
-  (hits, total) => `${hits} of ${total} recent sets landed in the productive band. Your loads are dialed in.`,
+  (hits, total) => `${hits} of ${total} sets in the sweet spot — engine tuned to you. Run the plan today.`,
+  (hits, total) => `${hits}/${total} hard sets in target. Loads reading you right — follow them today.`,
+  (hits, total) => `${hits} of ${total} sets dialed in. Trust today's prescription; just follow it.`,
+  (hits, total) => `${hits}/${total} in the zone — the engine knows your numbers now. Run it today.`,
+  (hits, total) => `${hits} of ${total} hard sets landed right. That's the system working. Trust the plan today.`,
+  (hits, total) => `${hits}/${total} sets in the sweet spot. The loads are following you — just show up and lift.`,
+  (hits, total) => `Dialed in: ${hits}/${total} sets on target. The engine's reading you right. Follow the prescription today.`,
+  (hits, total) => `${hits} of ${total} sets where they should be. That's not luck — the calibration is working. Trust it today.`,
 ];
 
+// Whole-training comeback. allowedNumbersFor(comeback) only allows gapDays
+// — no other numbers may appear in the line, even in deterministic prose
+// (kept consistent so the AI rephraser is bound to the same vocabulary).
 const COMEBACK_POOL: readonly ((gapDays: number) => string)[] = [
-  (gapDays) => `Welcome back — looks like you missed about ${gapDays} sessions. Just getting in today counts; don't chase old numbers.`,
-  (gapDays) => `Been away for around ${gapDays} sessions. Drop today's weights about 10% and build back up.`,
-  (gapDays) => `Back after roughly ${gapDays} missed sessions. Treat today as easing in, not proving anything.`,
+  (gapDays) => `Back after about ${gapDays} missed sessions. Today just counts — ease the loads and show up.`,
+  (gapDays) => `Roughly ${gapDays} sessions missed. Today's job: show up light, no proving. The numbers come back.`,
+  (gapDays) => `Welcome back — ${gapDays} sessions off. Ease in today; the old numbers can wait a week.`,
+  (gapDays) => `${gapDays} sessions missed. Don't try to make them all up today. Show up, move well, build back.`,
+  (gapDays) => `Back after ${gapDays} missed. The first one is always the hardest — just get it done light today.`,
+  (gapDays) => `${gapDays} sessions gone. The strength didn't leave; it's just resting. Start easy, find the groove today.`,
+  (gapDays) => `You've been out ${gapDays} sessions. No guilt, no catch-up — just an honest, easy session today.`,
+  (gapDays) => `Back at it after ${gapDays} missed. The comeback starts with showing up. Go light, move clean today.`,
 ];
 
 const FALLBACK_POOL: readonly ((workoutType: string, n: number) => string)[] = [
-  (workoutType, n) => `Today's a ${workoutType} day — ${n === 1 ? '1 exercise' : `${n} exercises`} on the board.`,
+  (workoutType, n) => `Today's a ${workoutType} day — ${n === 1 ? '1 exercise' : `${n} exercises`} ready. Hit them clean.`,
+  (workoutType, n) => `${workoutType} day. ${n === 1 ? 'One exercise' : `${n} exercises`} on the list — make every rep honest.`,
+  (workoutType, n) => `${workoutType} session queued up. ${n === 1 ? '1 lift' : `${n} lifts`} to go. Show up and do the work.`,
+  (workoutType, n) => `Time to train — ${workoutType} today. ${n === 1 ? 'One exercise' : `${n} exercises`}. Keep it simple, hit it clean.`,
+  (workoutType, n) => `${workoutType} day, ${n === 1 ? '1 exercise' : `${n} exercises`}. The plan's set — just follow it and log honest.`,
+  (workoutType, n) => `Today's ${workoutType}: ${n === 1 ? '1 lift' : `${n} lifts`} ready. Don't overthink it — show up, lift, log.`,
 ];
 
-// Rest-day baseline — the counterpart of FALLBACK_POOL for a day with no
-// planned training. Same TONE: plain, terse, no emoji, no exclamation, no
-// hype. Permission to rest, with the door left open to move if they want —
-// it complements the "Active recovery" CTA, it doesn't push it.
+// Rest-day baseline — counterpart of FALLBACK_POOL for a day with no
+// planned training. Every entry contains "rest" (test pin); never the
+// training-briefing template "{type} day" / "on the board" / "exercises".
+// Each line is read + REST-APPROPRIATE directive (permission to rest, no
+// workout-prep). The dashboard hero forces this onto rest days so a
+// workout-shaped read (dialed_in / effort_zone / stall) can never lead.
 const REST_DAY_POOL: readonly string[] = [
-  `Rest day — take it. If you feel like moving, you still can.`,
-  `Scheduled rest today. Recovery is where the work sticks — let it.`,
-  `No session on the board today. Rest up; light movement's fine if you want it.`,
+  `Rest day. Let the work catch up — move easy if you move at all.`,
+  `Rest by design today. Take it; recovery is where the gains stick.`,
+  `Scheduled rest. Don't train today — light movement only if you want it.`,
+  `Rest day. The body builds on the off days as much as the on days. Take it.`,
+  `No training today — that's the plan, not a skip. Eat, sleep, move easy.`,
+  `Rest. The work you did this week is still landing. Let it.`,
+  `Today's a rest day. Don't feel guilty about it — it's half the program.`,
+  `Recovery day. The lifts get stronger between sessions, not during. Take it easy.`,
 ];
 
 // ── Composite (synthesis) pools ─────────────────────────────────────────
-// These connect signals the single-fact pools would say separately. Same
-// TONE: terse, no emoji, no exclamation, no invented physiology ("nervous
-// system" etc.). Only the lift name (real data) is interpolated — the
-// judgment is qualitative, so there are no numbers to get wrong.
+// Read + directive. Only the lift name is interpolated; the judgment is
+// qualitative so there are no numbers to validate. pushing_hard test pins
+// the rotation contains "recovery | ease | pull the volume | protect".
 const PUSHING_HARD_POOL: readonly ((lift: string) => string)[] = [
-  (lift) => `${lift} is still climbing, but you're running hot — bank the win and protect recovery this week.`,
-  (lift) => `Real progress on ${lift}, and the fatigue's stacking up with it. Take the gain, ease the throttle this week.`,
-  (lift) => `You're pushing hard — ${lift}'s up but recovery's slipping. Hold what you've built and pull the volume back a touch.`,
+  (lift) => `${lift} climbing but you're running hot. Bank the win, ease the volume today.`,
+  (lift) => `Real progress on ${lift}; fatigue stacking. Hold what you've built — don't push for more today.`,
+  (lift) => `Pushing hard on ${lift} — recovery slipping. Pull the volume back today. The lift can wait.`,
+  (lift) => `${lift} is moving but the body's flagging. Protect the gain: lighter session today, come back full next time.`,
+  (lift) => `${lift}'s on a run and you're carrying fatigue. The smart move is ease back today — let recovery catch the progress.`,
+  (lift) => `Progress on ${lift} is real, but the energy's dropping. Don't force it today — drop a set, keep the quality.`,
+  (lift) => `${lift} climbing while the tank's running low. Back off the volume today; the weight will still be there next week.`,
+  (lift) => `You're pushing ${lift} hard and it's working — but the fatigue is too. Ease the volume today, protect the trend.`,
 ];
 
 const GRINDING_POOL: readonly ((lift: string) => string)[] = [
-  (lift) => `${lift}'s grinding and your energy's been low — that's a recovery week asking to happen. Lighten up and reset.`,
-  (lift) => `You're slogging on ${lift} with the tank low. No shame in a lighter week — that's usually where the stall breaks.`,
-  (lift) => `${lift} has stalled and you're showing up tired. Pull back, sleep, come back to it fresh.`,
+  (lift) => `${lift} stuck and you're tired. Today we hold the line, not chase it.`,
+  (lift) => `Slogging on ${lift} with the tank low. Take a lighter day — the stall breaks when the body recovers.`,
+  (lift) => `${lift} stalled, energy low. Light reset today — don't chase the number, chase the groove.`,
+  (lift) => `${lift} isn't moving and the fatigue is real. The fix isn't more weight — it's recovery. Go easy today.`,
+  (lift) => `Grinding on ${lift} with nothing in the tank. Drop the load today, move well, let the body come back.`,
+  (lift) => `${lift}'s stuck and you're running on empty. Stop pushing — a light day here is the right call.`,
+  (lift) => `The slog is real on ${lift} — stalled weight, low energy. Pull back today. The break comes when you're rested.`,
+  (lift) => `${lift} stalled while you're depleted. Don't grind harder — grind smarter. Ease off today, come back fresh.`,
 ];
 
 const BACK_ON_TRACK_POOL: readonly ((lift: string) => string)[] = [
-  (lift) => `Back in the groove — ${lift}'s moving again after the break. Keep the momentum, don't force it.`,
-  (lift) => `${lift}'s climbing again since you got back. The hard part's done; just keep showing up.`,
-  (lift) => `You returned and ${lift} is already trending up. That's the comeback working — stay the course.`,
+  (lift) => `${lift} climbing again since you came back. Keep showing up — don't force the number today.`,
+  (lift) => `Back in the groove — ${lift} is moving. Stay the course today; the comeback doesn't need to be fast.`,
+  (lift) => `Comeback's working on ${lift}. Same effort today, not bigger numbers. Let it build.`,
+  (lift) => `${lift} is responding again after the layoff. Don't rush it — show up, move well, the trend is back.`,
+  (lift) => `The return is paying off — ${lift} is climbing. Keep it steady today; no need to chase the old top yet.`,
+  (lift) => `${lift} moving again post-comeback. The smart move: same approach today, let the body reprove itself.`,
+  (lift) => `You're back and ${lift} shows it. Don't get greedy today — the groove is the goal, not the number.`,
+  (lift) => `Comeback's real — ${lift} is on the way back up. Show up again today; consistency finishes what the return started.`,
 ];
 
-// Plan rationale — split-specific because the framing is different per
-// split. Each sub-pool obeys the same TONE constraints (no emoji, no
-// exclamation, terse). Variants reference only `trainingDays` and the
-// vocabulary allowed by allowedNumbersFor (notably the constant 2 for
-// "twice a week" / "2x").
+// Plan rationale — split-specific framing. Each entry: ≤130 chars, read +
+// directive. Vocabulary obeys allowedNumbersFor (trainingDays + constant 2).
+// full_body must not contain `\b1\b` (test pin).
 const RATIONALE_FULL_BODY_POOL: readonly string[] = [
-  `You train once a week, so I built a full-body plan — every session hits everything.`,
-  `One day a week means full-body each time. Nothing gets left out.`,
-  `With a single weekly session, the smart move is full-body. That's what you've got.`,
+  `One day a week → full-body each time. Bring effort to every lift today — nothing gets skipped.`,
+  `Full-body plan, so nothing gets skipped. Show up and work the whole list today.`,
+  `Once weekly → full-body session. Hit every muscle today, no skip lines.`,
+  `Full-body once a week means every lift matters. Bring real effort across the board today.`,
+  `One session, whole body. Don't phone in any exercise — they all count today.`,
+  `Full-body day: every muscle gets its turn. Show up for all of it, not just the favorites.`,
 ];
 
 const RATIONALE_UPPER_LOWER_POOL: readonly string[] = [
-  `Two days a week, so I split it upper/lower — each muscle gets worked twice.`,
-  `Upper one day, lower the next. Over 2 sessions everything gets hit twice.`,
-  `Your 2 days run as an upper/lower split, so nothing's trained just once a week.`,
+  `Two days a week → upper/lower split. Today hits its half; the other waits.`,
+  `Upper/lower split. Today's half gets all the focus; the rest comes next time.`,
+  `Your two days run upper/lower. Today's group — full attention, no shortcuts.`,
+  `Upper/lower today. One half gets the work, the other rests. Give it everything.`,
+  `Two-day split, upper/lower. Today's half is the only one that matters — train it like it is.`,
+  `Upper or lower today — doesn't matter which, both get their turn. Focus on the half in front of you.`,
 ];
 
 const RATIONALE_PPL_POOL: readonly ((trainingDays: number) => string)[] = [
-  (td) => `${td} days a week lets us run push/pull/legs — more focused volume per muscle.`,
-  (td) => `With ${td} sessions, you're on push/pull/legs. Each group gets its own day.`,
-  (td) => `${td} days means push/pull/legs — hard work, then real recovery between sessions.`,
+  (td) => `${td} days a week → push/pull/legs. Today's session has its own focus — bring all the effort to it.`,
+  (td) => `With ${td} days, you're on push/pull/legs. Today's group gets everything; the others can wait.`,
+  (td) => `${td} sessions, push/pull/legs. Today's group — work it clean, don't spread the effort thin.`,
+  (td) => `${td}-day PPL. Each day is one job. Today's job is the group in front of you — bring it.`,
+  (td) => `Push/pull/legs on ${td} days. Today is one third of the week. Make it count on its own.`,
+  (td) => `${td} days, push/pull/legs split. Today's session is its own thing — don't hold back for tomorrow.`,
 ];
 
 const RATIONALE_BRO_SPLIT_POOL: readonly ((trainingDays: number) => string)[] = [
-  (td) => `${td} days a week, so each muscle gets its own day — deep, focused work.`,
-  (td) => `A body-part split fits your ${td} days. One muscle group per session, done properly.`,
-  (td) => `With ${td} sessions, every muscle gets a dedicated day. That's where the volume pays off.`,
+  (td) => `${td} days = a muscle a day. Bring all your effort to today's group — it's the only one getting worked.`,
+  (td) => `Body-part split fits your ${td} days. Today is one muscle, done properly.`,
+  (td) => `${td} sessions, one muscle each. Today's group gets full attention — don't rush it.`,
+  (td) => `${td}-day bro split. Today is one muscle's day. Give it everything; the rest get theirs later.`,
+  (td) => `One muscle per session, ${td} days a week. Today's group is the only one that matters right now.`,
+  (td) => `${td} days, a muscle each. Today's group gets the spotlight — train it like nothing else is on the schedule.`,
 ];
 
-// Calibration — pure prose pool. No `trainingDays` reference; only the
-// constants 2 and 14 are allowed (and most variants don't use either).
-const CALIBRATION_POOL: readonly string[] = [
-  `First couple weeks, I'm learning your real strength — every set you log sharpens the plan.`,
-  `Early days. Log honestly and I'll have your loads dialed in fast.`,
-  `Still getting your numbers. The next 2 weeks set your real baseline.`,
-  `We're just getting started. Show up and I'll tune the weights to you.`,
-  `Give me a couple honest weeks and the coaching gets a lot more specific.`,
+// Priority personalization — surfaces when the user named a specific muscle
+// or compound in onboarding. Priority WINS over goal in the phraser branch
+// because it's the more concrete answer ("Bench" beats "Strength"). The
+// presented `priority` is sanitized to a display token (Title Case for
+// muscle buckets, plain title for compounds). No digits are interpolated;
+// validatePhrasing's allowed-number guard never trips.
+//
+// Compounds use the "getting your X moving" template — the test pin reads
+// /bench|squat|deadlift/i for the compound rotation, /chest|back|shoulders|
+// arms|legs/i for the bucket rotation.
+const PRIORITY_BUCKET_POOL: readonly ((priority: string) => string)[] = [
+  (p) => `Built around your ${p} — bring real effort to those exercises today.`,
+  (p) => `${p} is your focus — push it harder than the rest today.`,
+  (p) => `${p} matters most to you — show up for those lifts and stay clean.`,
+  (p) => `Plan's tuned for your ${p}. Today, those exercises get the most attention — don't hold back on them.`,
+  (p) => `Your ${p} is the priority. When those lifts come up today, bring the real effort.`,
+  (p) => `Built around ${p}. That's where the energy goes today — everything else supports it.`,
 ];
+
+const PRIORITY_COMPOUND_POOL: readonly ((priority: string) => string)[] = [
+  (p) => `Built around getting your ${p} moving. Show up for that lift today.`,
+  (p) => `${p} is the lift we're chasing. Bring full effort when it lands today.`,
+  (p) => `Plan tuned to push your ${p}. Run that one with intent today.`,
+  (p) => `Your ${p} is the headline lift. When it comes up today, treat it like the main event.`,
+  (p) => `Built around ${p}. That's the lift that matters most today — give it everything.`,
+  (p) => `${p} is the one we're pushing. Today, that lift gets your best set.`,
+];
+
+// Goal-only personalization — surfaces when the user picked a goal but no
+// specific priority. No interpolation, no digits. Each line ≤ 130 and
+// carries a directive cue (own/chase/show/run/keep).
+const GOAL_STRENGTH_POOL: readonly string[] = [
+  `Tuned for strength — own the bar before you add to it. Form first today.`,
+  `Built for heavier numbers. Keep the form crisp before chasing more weight today.`,
+  `Strength focus. Run the big lifts with intent today; the rest is support.`,
+  `Strength plan. The bar is the test — own it, don't rush it. Add weight only when the rep is clean.`,
+  `Tuned for strength. Today's heavy lifts are the whole point. Bring full focus to the bar.`,
+  `Built for strength. The numbers come from clean reps, not grinding. Keep it sharp today.`,
+];
+
+const GOAL_MUSCLE_POOL: readonly string[] = [
+  `Tuned for size — chase a clean rep before the weight. Today, push every set close to the limit.`,
+  `Built around growth. Push every set close to failure, take the rest you need today.`,
+  `Size focus. Show up for the volume today; reps stay clean to the end.`,
+  `Tuned for size. The muscle grows from effort, not from weight. Take every set near the edge today.`,
+  `Growth plan. Today: chase the rep, not the plate. Push close to failure, rest honest.`,
+  `Built for muscle. The volume is the work — show up for every set today, don't coast the last ones.`,
+];
+
+const GOAL_GENERAL_POOL: readonly string[] = [
+  `Built for steady progress. Show up, train clean, log the work today.`,
+  `General progress plan. Keep the work honest — small, regular wins stack.`,
+  `Tuned for the long arc. Today: hit it clean, then come back tomorrow.`,
+  `Steady progress plan. Today's session doesn't need to be heroic — it needs to happen. Show up.`,
+  `Built for the long game. Consistent, clean sessions beat occasional great ones. Train honest today.`,
+  `General focus. The best session is the one you actually do. Show up and keep it clean today.`,
+];
+
+/** Sanitize a stored priority value for prose. Compounds get a capitalised
+ *  noun ("Bench" / "Squat" / "Deadlift"); muscle buckets get a lower-case
+ *  noun ("chest" / "back") so the sentence reads naturally ("your chest").
+ *  Returns null when the value isn't one of the closed set we expect — the
+ *  phraser then falls back to the goal / split branch. */
+function displayPriority(p: string | null | undefined): { text: string; kind: 'bucket' | 'compound' } | null {
+  if (!p) return null;
+  const k = p.trim().toLowerCase();
+  switch (k) {
+    case 'chest':
+    case 'back':
+    case 'shoulders':
+    case 'arms':
+    case 'legs':
+      return { text: k, kind: 'bucket' };
+    case 'bench':
+      return { text: 'Bench', kind: 'compound' };
+    case 'squat':
+      return { text: 'Squat', kind: 'compound' };
+    case 'deadlift':
+      return { text: 'Deadlift', kind: 'compound' };
+    default:
+      return null;
+  }
+}
+
+// Calibration — pure prose pool. No `trainingDays` reference; only
+// constants 2 and 14 are allowed by validatePhrasing. Test pins that the
+// rotation matches /calibrat|baseline|learning|dial|tune|honest/.
+//
+// Re-tuned for the cold-start arc: every line explicitly tells the user
+// what to DO this session (find a set with ~2 reps left, rate it) so the
+// calibration window is an active hook, not a passive "wait and see". The
+// vocabulary still matches the test pin and the no-digit rule (only 2 and
+// 14 allowed; the lines use "2" inside "2 reps left").
+const CALIBRATION_POOL: readonly string[] = [
+  `Starting weights are a guess. Find a set with 2 reps left, rate it — I'll dial in.`,
+  `Early days — I'm learning your real numbers. Stop with 2 in the tank, log honestly.`,
+  `Calibrating to you. Pick a load you finish with 2 reps left; rate it so I can tune.`,
+  `Still finding your numbers. Today: a set with 2 left, rated honestly.`,
+  `Baseline week. Stop a set short, rate it honestly — get the loads dialed today.`,
+  `I'm learning what you can actually move. Today: find a weight you finish with 2 reps left and rate it.`,
+  `Calibration phase — the first couple weeks. Pick a set, leave 2 reps, rate it honest. That's the whole job today.`,
+  `Still dialing in your baseline. The honest ratings are what make the plan work — leave 2, rate it real.`,
+];
+
+// ── Hero length contract ───────────────────────────────────────────────
+// The dashboard hero shows EXACTLY ONE line. 130 chars is the hard cap so
+// the editorial-scale Syne Bold fits on 3–4 lines at the responsive size
+// inside CoachVoiceHero (numberOfLines={4}, minimumFontScale={0.65}).
+// Every authored pool entry above respects this, and the test "every
+// hero-eligible line ≤ MAX_HERO_LINE_LEN chars" pins it for future
+// contributors. validatePhrasing in coachVoiceAI reads the same constant
+// so an AI rephrase over 130 chars falls back to the deterministic line.
+export const MAX_HERO_LINE_LEN = 130;
 
 // ── Public API ─────────────────────────────────────────────────────────
 
@@ -277,7 +491,20 @@ export function phraseObservation(obs: CoachObservation): string {
       return pick(GRINDING_POOL, obs.factSig)(obs.lift);
     case 'back_on_track':
       return pick(BACK_ON_TRACK_POOL, obs.factSig)(obs.lift);
-    case 'plan_rationale':
+    case 'plan_rationale': {
+      // Personalisation branch: a stored priority WINS over the split copy
+      // (it's the user's most concrete answer), and a stored goal beats the
+      // generic split copy in turn. Both fall back to the split-only pool
+      // when absent, which preserves legacy phrasing for any rationale
+      // built without opts.
+      const prio = displayPriority(obs.priority);
+      if (prio) {
+        const pool = prio.kind === 'compound' ? PRIORITY_COMPOUND_POOL : PRIORITY_BUCKET_POOL;
+        return pick(pool, obs.factSig)(prio.text);
+      }
+      if (obs.goal === 'strength') return pick(GOAL_STRENGTH_POOL, obs.factSig);
+      if (obs.goal === 'muscle') return pick(GOAL_MUSCLE_POOL, obs.factSig);
+      if (obs.goal === 'general') return pick(GOAL_GENERAL_POOL, obs.factSig);
       switch (obs.split) {
         case 'full_body':
           return pick(RATIONALE_FULL_BODY_POOL, obs.factSig);
@@ -291,8 +518,9 @@ export function phraseObservation(obs: CoachObservation): string {
           // Unknown split label — degrade to a neutral line rather than
           // throwing. Should never fire in practice (the builder gates on
           // a non-null split from profiles.preferred_split).
-          return `${obs.trainingDays} training days a week — the plan is built around that cadence.`;
+          return `${obs.trainingDays} training days a week — the plan's built around that cadence. Show up today.`;
       }
+    }
     case 'calibration':
       return pick(CALIBRATION_POOL, obs.factSig);
   }

@@ -2,11 +2,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -18,6 +20,7 @@ import { splitForDays, type FitnessLevel, type SplitId } from '../src/lib/planGe
 import { ensureCurrentWeekPlan, writeCachedProfileInputs } from '../src/lib/planSync';
 import { enableNotificationsIfFirstTime } from '../src/utils/notifications';
 import { layout, typography } from '../src/theme';
+import { hasConsecutiveRun } from '../src/utils/trainingWeekdays';
 
 // Three taps to a real first workout.
 // We intentionally collect ONLY the minimum needed to generate a plan:
@@ -29,7 +32,22 @@ import { layout, typography } from '../src/theme';
 // other profile fields are back-fillable from Profile too — never block
 // activation on them. Defaults: days=3, split=splitForDays(3), location=gym.
 
-const DAYS_OPTIONS = [2, 3, 4, 5, 6];
+// Weekday picker. Order rendered as Mon..Sun (week-start convention used by
+// most fitness apps); values are JS Date.getDay() indices (0=Sun..6=Sat) so
+// they pair directly with `training_weekdays` storage and `weekdaysToOffsets`.
+const WEEKDAY_LAYOUT: { value: number; label: string }[] = [
+  { value: 1, label: 'M' },
+  { value: 2, label: 'T' },
+  { value: 3, label: 'W' },
+  { value: 4, label: 'T' },
+  { value: 5, label: 'F' },
+  { value: 6, label: 'S' },
+  { value: 0, label: 'S' },
+];
+const MIN_WEEKDAYS = 3;
+const MAX_WEEKDAYS = 6;
+// Default to Mon/Wed/Fri — the most common 3-day pattern, spaced for recovery.
+const DEFAULT_WEEKDAYS = [1, 3, 5];
 const LEVELS: { value: FitnessLevel; label: string; hint: string }[] = [
   { value: 'beginner', label: 'Beginner', hint: '< 1 yr' },
   { value: 'intermediate', label: 'Intermediate', hint: '1–3 yrs' },
@@ -45,26 +63,107 @@ const SPLIT_OPTIONS: { value: SplitId; label: string; desc: string }[] = [
   { value: 'bro_split', label: 'Bro Split', desc: 'One body-part per day — chest, back, shoulders, arms, legs.' },
 ];
 
+// Goal — one of three. Required (the only new field that blocks submit).
+// Stored verbatim on profiles.goal; consumed by buildPlanRationale phrasing
+// and (later) by volume / rep-range biasing.
+type Goal = 'strength' | 'muscle' | 'general';
+const GOAL_OPTIONS: { value: Goal; label: string; desc: string }[] = [
+  { value: 'strength', label: 'Strength', desc: 'Heavier numbers on the big lifts.' },
+  { value: 'muscle', label: 'Muscle', desc: 'Bigger, more visible muscle.' },
+  { value: 'general', label: 'General', desc: 'Move better, feel stronger.' },
+];
+
+// Priority — optional. The user picks one area / lift to flag as the thing
+// they most want to move. Map to muscle filter buckets we already use OR a
+// key compound (the seed helper recognises the same names). 'none' is a
+// real, non-judgmental answer; stored as NULL.
+type Priority =
+  | 'chest' | 'back' | 'shoulders' | 'arms' | 'legs'
+  | 'bench' | 'squat' | 'deadlift';
+const PRIORITY_OPTIONS: { value: Priority; label: string }[] = [
+  { value: 'chest', label: 'Chest' },
+  { value: 'back', label: 'Back' },
+  { value: 'shoulders', label: 'Shoulders' },
+  { value: 'arms', label: 'Arms' },
+  { value: 'legs', label: 'Legs' },
+  { value: 'bench', label: 'Bench' },
+  { value: 'squat', label: 'Squat' },
+  { value: 'deadlift', label: 'Deadlift' },
+];
+
+type Sex = 'male' | 'female' | 'unspecified';
+const SEX_OPTIONS: { value: Sex; label: string }[] = [
+  { value: 'male', label: 'M' },
+  { value: 'female', label: 'F' },
+  { value: 'unspecified', label: 'Rather not say' },
+];
+
+// Bodyweight bounds match the migration's CHECK so a value the DB will accept
+// is the same set the UI lets through. Anything outside this range gets
+// quietly dropped before submit (not surfaced as an error — the field is
+// skippable; an unparseable input simply means "no seed").
+const BODYWEIGHT_MIN_KG = 25;
+const BODYWEIGHT_MAX_KG = 300;
+
 export default function OnboardingScreen() {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
   const router = useRouter();
 
   const [level, setLevel] = useState<FitnessLevel | null>(null);
-  const [days, setDays] = useState(3);
+  // Calendar weekdays the user can train on (0=Sun..6=Sat). The number of
+  // selected weekdays IS the training-days count — there's no separate
+  // count input. Enforced 3..6 in the UI; legacy / 1-2-7-day users live
+  // outside this picker (existing rows untouched).
+  const [weekdays, setWeekdays] = useState<number[]>(DEFAULT_WEEKDAYS);
+  const days = weekdays.length;
   // Split is pre-selected from the day count as a sensible default, but the
   // user's pick is authoritative. `splitTouched` stops the days-driven default
   // from overriding an explicit choice.
-  const [split, setSplit] = useState<SplitId>(splitForDays(3));
+  const [split, setSplit] = useState<SplitId>(splitForDays(DEFAULT_WEEKDAYS.length));
   const [splitTouched, setSplitTouched] = useState(false);
+
+  // Cold-start personalization. Goal is required; everything else is
+  // skippable so a hesitant user is never stuck on the body inputs.
+  const [goal, setGoal] = useState<Goal | null>(null);
+  const [priority, setPriority] = useState<Priority | null>(null);
+  const [bodyweightInput, setBodyweightInput] = useState<string>('');
+  const [sex, setSex] = useState<Sex | null>(null);
+
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Changing days nudges the default split — until the user has picked one.
-  const handleDaysChange = (d: number) => {
-    setDays(d);
-    if (!splitTouched) setSplit(splitForDays(d));
+  // Parse the bodyweight text input. Decimal-tolerant (the field accepts a
+  // comma OR a dot — easier for EU users). Anything outside the plausible
+  // range or unparseable returns null, which the seed helper treats as
+  // "user skipped" → no fake number.
+  const parseBodyweight = (raw: string): number | null => {
+    const normalized = raw.replace(',', '.').trim();
+    if (!normalized) return null;
+    const n = Number(normalized);
+    if (!Number.isFinite(n)) return null;
+    if (n < BODYWEIGHT_MIN_KG || n > BODYWEIGHT_MAX_KG) return null;
+    return Math.round(n * 100) / 100;
   };
+
+  // Toggle a weekday in/out of the selection. Capped at MAX_WEEKDAYS (a
+  // tap that would push over the cap is dropped silently — the count
+  // hint below the picker explains the bound). Below MIN_WEEKDAYS the
+  // submit button is disabled; we don't auto-reject mid-selection.
+  const toggleWeekday = (w: number) => {
+    setWeekdays(prev => {
+      const next = prev.includes(w) ? prev.filter(x => x !== w) : [...prev, w].sort((a, b) => a - b);
+      if (next.length > MAX_WEEKDAYS) return prev;
+      // Re-default the split when the user hasn't expressed a preference,
+      // mirroring the prior "days nudges split" behavior.
+      if (!splitTouched) setSplit(splitForDays(next.length));
+      return next;
+    });
+  };
+
+  const clusteredNote = hasConsecutiveRun(weekdays, 3)
+    ? 'Heads-up: three or more days in a row can leave little time to recover. Spread them out if you can.'
+    : null;
 
   // Fire onboarding_started once per mount. The funnel needs a "started"
   // edge to measure drop-off vs. onboarding_completed; without it we only
@@ -77,12 +176,59 @@ export default function OnboardingScreen() {
     track('onboarding_started');
   }, []);
 
-  // Only `level` is truly required from the user; the other two have sane
-  // defaults so a one-tap-plus-CTA path works.
-  const isValid = level !== null;
+  // `level` + `goal` are required; weekday count must be in [MIN_WEEKDAYS, MAX_WEEKDAYS].
+  // priority, bodyweight, and sex are all optional — skipping any of them
+  // collapses the seed back to a calibration entry on session 1, which is a
+  // valid path. Goal is the only NEW required field because every coach
+  // rationale line specializes on it.
+  const isValid =
+    level !== null &&
+    goal !== null &&
+    weekdays.length >= MIN_WEEKDAYS &&
+    weekdays.length <= MAX_WEEKDAYS;
 
-  const handleSubmit = async () => {
+  // Show the split-mismatch prompt and proceed with whichever option the
+  // user picks. The actual persistence + plan-gen lives in submitWith(),
+  // so both paths funnel into one code path; the dialog only chooses
+  // which split value to pass.
+  const handleSubmit = () => {
     if (!isValid || submitting) return;
+
+    const recommended = splitForDays(days);
+    if (split === recommended) {
+      void submitWith(split);
+      return;
+    }
+
+    // Soft guardrail: a bro_split user who picked 3 days will structurally
+    // never reach arms/legs with the historical generator unless they bump
+    // to 5+ days/week or switch to PPL. We steer to PPL but never block —
+    // the user's choice still wins if they tap "Keep my choice".
+    const recommendedLabel = SPLIT_OPTIONS.find(s => s.value === recommended)?.label ?? recommended;
+    const chosenLabel = SPLIT_OPTIONS.find(s => s.value === split)?.label ?? split;
+    Alert.alert(
+      'Quick check',
+      `For ${days} days a week, ${recommendedLabel} trains every muscle group more evenly than ${chosenLabel}. Use ${recommendedLabel}?`,
+      [
+        {
+          text: `Use ${recommendedLabel}`,
+          onPress: () => {
+            setSplit(recommended);
+            setSplitTouched(true);
+            void submitWith(recommended);
+          },
+        },
+        {
+          text: 'Keep my choice',
+          style: 'cancel',
+          onPress: () => void submitWith(split),
+        },
+      ],
+    );
+  };
+
+  const submitWith = async (chosenSplit: SplitId) => {
+    if (submitting) return;
     setErrorMsg('');
     setSubmitting(true);
 
@@ -100,11 +246,24 @@ export default function OnboardingScreen() {
       //    user has provided everything the engine actually needs.
       //    preferred_split is the user's CHOSEN split (authoritative), not a
       //    function of the day count.
+      // Bodyweight + sex are only persisted when the user actually entered
+      // them. An empty / invalid bodyweight stays NULL in the row, which is
+      // exactly what the seed helper reads as "user skipped → no seed".
+      const bodyweightKg = parseBodyweight(bodyweightInput);
       const { error: profileErr } = await supabase.from('profiles').upsert({
         id: user.id,
         training_days: days,
-        preferred_split: split,
+        preferred_split: chosenSplit,
         fitness_level: level,
+        // The picker is the source of truth for which calendar days the
+        // plan schedules sessions on; training_days is just its length.
+        training_weekdays: weekdays,
+        // Cold-start personalization. Goal is required. The other three are
+        // skippable — passing null preserves the existing NULL in the row.
+        goal,
+        priority: priority ?? null,
+        bodyweight_kg: bodyweightKg,
+        sex: sex ?? null,
         onboarding_complete: true,
       });
       if (profileErr) throw profileErr;
@@ -120,8 +279,9 @@ export default function OnboardingScreen() {
       //    model as plan:current / user:defaultLocation). Fire-and-forget.
       await writeCachedProfileInputs({
         training_days: days,
-        preferred_split: split,
+        preferred_split: chosenSplit,
         fitness_level: level,
+        training_weekdays: weekdays,
       });
 
       // 3. Generate + persist the first weekly plan. force:true skips the
@@ -130,7 +290,13 @@ export default function OnboardingScreen() {
       //    Reuse the shared helper — do NOT duplicate plan-gen here.
       const planDays = await ensureCurrentWeekPlan({ force: true });
 
-      track('onboarding_completed', { training_days: days });
+      track('onboarding_completed', {
+        training_days: days,
+        goal,
+        priority: priority ?? 'none',
+        has_bodyweight: bodyweightKg != null,
+        sex: sex ?? 'unset',
+      });
 
       // Default-on reminders: prompt for permission once, save 18:00 as the
       // default time, and schedule against the plan we just generated. The
@@ -202,23 +368,44 @@ export default function OnboardingScreen() {
             })}
           </View>
 
-          {/* Days per week */}
-          <Text style={[styles.label, { marginTop: layout.spacing.xl }]}>How many days a week?</Text>
+          {/* Weekday picker. The number of selected weekdays IS the
+              training-days count — splitForDays(days) uses the same count. */}
+          <Text style={[styles.label, { marginTop: layout.spacing.xl }]}>Which days can you train?</Text>
           <View style={styles.daysRow}>
-            {DAYS_OPTIONS.map(d => {
-              const selected = days === d;
+            {WEEKDAY_LAYOUT.map(opt => {
+              const selected = weekdays.includes(opt.value);
+              const atCap = !selected && weekdays.length >= MAX_WEEKDAYS;
               return (
                 <TouchableOpacity
-                  key={d}
-                  style={[styles.dayPill, selected && styles.dayPillActive]}
-                  onPress={() => handleDaysChange(d)}
+                  key={opt.value}
+                  style={[
+                    styles.dayPill,
+                    selected && styles.dayPillActive,
+                    atCap && { opacity: 0.4 },
+                  ]}
+                  onPress={() => toggleWeekday(opt.value)}
+                  disabled={atCap}
                   activeOpacity={0.8}
+                  accessibilityLabel={`Toggle ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][opt.value]}`}
+                  accessibilityState={{ selected }}
                 >
-                  <Text style={[styles.dayText, selected && styles.dayTextActive]}>{d}</Text>
+                  <Text style={[styles.dayText, selected && styles.dayTextActive]}>{opt.label}</Text>
                 </TouchableOpacity>
               );
             })}
           </View>
+          <Text style={styles.deferNote}>
+            {weekdays.length === 0
+              ? `Pick ${MIN_WEEKDAYS}–${MAX_WEEKDAYS} days.`
+              : weekdays.length < MIN_WEEKDAYS
+                ? `Pick ${MIN_WEEKDAYS - weekdays.length} more — at least ${MIN_WEEKDAYS} days a week.`
+                : `${weekdays.length} day${weekdays.length === 1 ? '' : 's'} a week.`}
+          </Text>
+          {clusteredNote && (
+            <Text style={[styles.deferNote, { color: colors.accentAmber }]}>
+              {clusteredNote}
+            </Text>
+          )}
 
           {/* Workout split */}
           <Text style={[styles.label, { marginTop: layout.spacing.xl }]}>Which split do you want?</Text>
@@ -237,6 +424,85 @@ export default function OnboardingScreen() {
                 </TouchableOpacity>
               );
             })}
+          </View>
+
+          {/* Goal — required. Drives the cold-start coach rationale ("built
+              around getting your bench moving") and later, volume biasing. */}
+          <Text style={[styles.label, { marginTop: layout.spacing.xl }]}>What are you here for?</Text>
+          <View style={styles.levelRow}>
+            {GOAL_OPTIONS.map(opt => {
+              const selected = goal === opt.value;
+              return (
+                <TouchableOpacity
+                  key={opt.value}
+                  style={[styles.levelChip, selected && styles.levelChipActive]}
+                  onPress={() => setGoal(opt.value)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.levelLabel, selected && styles.levelLabelActive]}>{opt.label}</Text>
+                  <Text style={[styles.levelHint, selected && styles.levelHintActive]} numberOfLines={1}>{opt.desc}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {/* Priority — optional. One area or lift the user most wants to
+              move. A second tap on the same chip unselects (== "no preference"). */}
+          <Text style={[styles.label, { marginTop: layout.spacing.xl }]}>Anything you want to push? (optional)</Text>
+          <View style={styles.priorityWrap}>
+            {PRIORITY_OPTIONS.map(opt => {
+              const selected = priority === opt.value;
+              return (
+                <TouchableOpacity
+                  key={opt.value}
+                  style={[styles.priorityChip, selected && styles.priorityChipActive]}
+                  onPress={() => setPriority(prev => (prev === opt.value ? null : opt.value))}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.priorityChipText, selected && styles.priorityChipTextActive]}>{opt.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {/* Bodyweight + sex — both optional. Framed functionally so the
+              user knows WHY we're asking; skipping is fine and just means
+              session 1 stays a calibration entry instead of a seeded one. */}
+          <Text style={[styles.label, { marginTop: layout.spacing.xl }]}>
+            Bodyweight (optional)
+          </Text>
+          <Text style={styles.helperNote}>
+            Lets us seed sensible starting weights. Skip and session one becomes a quick calibration set.
+          </Text>
+          <View style={styles.bodyRow}>
+            <View style={styles.bodyInputWrap}>
+              <TextInput
+                style={styles.bodyInput}
+                value={bodyweightInput}
+                onChangeText={setBodyweightInput}
+                placeholder="—"
+                placeholderTextColor={colors.textMuted}
+                keyboardType="decimal-pad"
+                maxLength={6}
+                accessibilityLabel="Bodyweight in kilograms"
+              />
+              <Text style={styles.bodyUnit}>kg</Text>
+            </View>
+            <View style={styles.sexRow}>
+              {SEX_OPTIONS.map(opt => {
+                const selected = sex === opt.value;
+                return (
+                  <TouchableOpacity
+                    key={opt.value}
+                    style={[styles.sexChip, selected && styles.sexChipActive]}
+                    onPress={() => setSex(prev => (prev === opt.value ? null : opt.value))}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.sexChipText, selected && styles.sexChipTextActive]}>{opt.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
           </View>
 
           <Text style={styles.deferNote}>
@@ -290,7 +556,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   label: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 14,
+    fontSize: typography.size.s14,
     color: colors.textSecondary,
     marginBottom: layout.spacing.sm,
   },
@@ -314,7 +580,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   levelLabel: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 13,
+    fontSize: typography.size.s13,
     color: colors.textPrimary,
   },
   levelLabelActive: {
@@ -322,7 +588,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   levelHint: {
     fontFamily: typography.family.body,
-    fontSize: 10,
+    fontSize: typography.size.s10,
     letterSpacing: 1,
     color: colors.textMuted,
     marginTop: 2,
@@ -381,7 +647,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   splitDesc: {
     fontFamily: typography.family.body,
-    fontSize: 12,
+    fontSize: typography.size.s12,
     color: colors.textMuted,
     marginTop: 3,
     lineHeight: 16,
@@ -391,12 +657,103 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   deferNote: {
     fontFamily: typography.family.body,
-    fontSize: 12,
+    fontSize: typography.size.s12,
     color: colors.textMuted,
     textAlign: 'center',
     marginTop: layout.spacing.xl,
     paddingHorizontal: layout.spacing.md,
     lineHeight: 17,
+  },
+  helperNote: {
+    fontFamily: typography.family.body,
+    fontSize: typography.size.s12,
+    color: colors.textMuted,
+    marginTop: -layout.spacing.xs,
+    marginBottom: layout.spacing.sm,
+    lineHeight: 16,
+  },
+  priorityWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  priorityChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: layout.cardRadius,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    backgroundColor: colors.surface,
+  },
+  priorityChipActive: {
+    borderColor: colors.accentTeal,
+    backgroundColor: colors.surfaceElevated,
+  },
+  priorityChipText: {
+    fontFamily: typography.family.bodyMedium,
+    fontSize: typography.size.s13,
+    color: colors.textPrimary,
+  },
+  priorityChipTextActive: {
+    color: colors.accentTeal,
+  },
+  bodyRow: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'stretch',
+  },
+  bodyInputWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: layout.spacing.md,
+    height: 56,
+    borderRadius: layout.cardRadius,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    backgroundColor: colors.surface,
+  },
+  bodyInput: {
+    flex: 1,
+    fontFamily: typography.family.heading,
+    fontSize: typography.size.lg,
+    color: colors.textPrimary,
+    padding: 0,
+  },
+  bodyUnit: {
+    fontFamily: typography.family.body,
+    fontSize: typography.size.s13,
+    color: colors.textMuted,
+    marginLeft: 6,
+  },
+  sexRow: {
+    flexDirection: 'row',
+    gap: 6,
+    flex: 1.2,
+  },
+  sexChip: {
+    flex: 1,
+    minWidth: 36,
+    paddingHorizontal: 8,
+    borderRadius: layout.cardRadius,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sexChipActive: {
+    borderColor: colors.accentTeal,
+    backgroundColor: colors.surfaceElevated,
+  },
+  sexChipText: {
+    fontFamily: typography.family.bodyMedium,
+    fontSize: typography.size.s12,
+    color: colors.textPrimary,
+    textAlign: 'center',
+  },
+  sexChipTextActive: {
+    color: colors.accentTeal,
   },
   errorText: {
     fontFamily: typography.family.body,

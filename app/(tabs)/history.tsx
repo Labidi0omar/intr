@@ -71,7 +71,6 @@ export default function HistoryScreen() {
   const [filteredGroups, setFilteredGroups] = useState<GroupedHistory[]>([]);
   const [muscleGroups, setMuscleGroups] = useState<string[]>([]);
   const [selectedMuscle, setSelectedMuscle] = useState<string>('ALL');
-  const [showMuscleSheet, setShowMuscleSheet] = useState(false);
 
   useEffect(() => { fetchHistoryData(); }, []);
 
@@ -206,7 +205,7 @@ export default function HistoryScreen() {
                     title="No sessions yet"
                     body="Your history starts with your first session."
                     ctaLabel="Start your first workout"
-                    onCtaPress={() => router.replace('/home')}
+                    onCtaPress={() => router.replace('/(tabs)/home')}
                   />
                 ) : (
                   <EmptyState
@@ -310,94 +309,16 @@ const makeStyles = (colors: any) => StyleSheet.create({
   progressBarTrack: {
     height: 6,
     backgroundColor: colors.sliderTrack,
-    borderRadius: 3,
+    borderRadius: layout.radii.r3,
     overflow: 'hidden',
   },
   progressBarFill: {
     height: 6,
     backgroundColor: colors.accentTeal,
-    borderRadius: 3,
-  },
-  dotsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: layout.spacing.sm,
-    marginBottom: layout.spacing.xl,
-  },
-  dotCol: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    width: 48,
-  },
-  dotColToday: {
-    borderRadius: layout.cardRadius,
-    borderWidth: 1,
-    borderColor: colors.accentTeal,
-    padding: 4,
-    margin: -4,
-  },
-  dotFilled: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.accentTeal,
-  },
-  dotMissed: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  dotMissedText: {
-    color: colors.textMuted,
-    fontSize: 14,
-    lineHeight: 16,
-    fontWeight: '700',
-  },
-  dotRest: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    borderWidth: 2,
-    borderColor: colors.cardBorder,
-    backgroundColor: 'transparent',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  dotLabel: {
-    fontFamily: typography.family.body,
-    fontSize: typography.size.xs,
-    color: colors.textSecondary,
+    borderRadius: layout.radii.r3,
   },
   archiveContainer: {
     marginTop: layout.spacing.sm,
-  },
-  emptyState: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: layout.spacing.xxl,
-  },
-  illustrationPlaceholder: {
-    width: 200,
-    height: 150,
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: colors.cardBorder,
-    borderRadius: layout.cardRadius,
-    marginBottom: layout.spacing.xl,
-  },
-  emptyText: {
-    fontFamily: typography.family.body,
-    fontSize: typography.size.md,
-    color: colors.textSecondary,
-    textAlign: 'center',
-    paddingHorizontal: layout.spacing.xl,
-    lineHeight: 22,
   },
   monthGroup: {
     marginBottom: layout.spacing.xl,
@@ -408,50 +329,10 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   filterLabelText: {
     fontFamily: typography.family.body,
-    fontSize: 11,
+    fontSize: typography.size.s11,
     color: colors.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 2,
-  },
-  // Modal bottom sheet
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'flex-end',
-  },
-  modalSheet: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: layout.cardRadius,
-    borderTopRightRadius: layout.cardRadius,
-    padding: layout.spacing.lg,
-    paddingBottom: layout.spacing.xl,
-    borderWidth: 1,
-    borderColor: colors.cardBorder,
-    borderBottomWidth: 0,
-  },
-  modalHandle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: colors.textMuted,
-    alignSelf: 'center',
-    marginBottom: layout.spacing.md,
-  },
-  sheetOption: {
-    paddingVertical: layout.spacing.md,
-    paddingHorizontal: layout.spacing.md,
-    borderLeftWidth: 1,
-    borderLeftColor: 'transparent',
-    marginBottom: layout.spacing.xs,
-  },
-  sheetOptionActive: {
-    borderLeftColor: colors.borderActive,
-  },
-  sheetOptionText: {
-    fontFamily: typography.family.bodyMedium,
-    fontSize: 14,
-    color: colors.textPrimary,
-    textTransform: 'uppercase',
   },
   monthHeader: {
     fontFamily: typography.family.heading,
@@ -476,18 +357,18 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   sessionType: {
     fontFamily: typography.family.heading,
-    fontSize: 17,
+    fontSize: typography.size.s17,
     color: colors.textPrimary,
     letterSpacing: 0.3,
     marginBottom: 4,
   },
   sessionDate: {
-    fontSize: 14,
+    fontSize: typography.size.s14,
     color: colors.textMuted,
     fontFamily: typography.family.body,
   },
   exerciseRow: {
-    fontSize: 13,
+    fontSize: typography.size.s13,
     color: colors.textPrimary,
     marginTop: 4,
     fontFamily: typography.family.body,

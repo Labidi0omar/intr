@@ -203,7 +203,15 @@ export function buildReadinessNarration(energyScore: number): ReadinessNarration
 // The function is pure so the unit tests don't mock React/Supabase.
 
 export type PrescriptionRationale = 'progress' | 'hold' | 'backoff' | 'no_history';
-export type PrescriptionCause = 'failure' | 'low_energy' | 'rir' | 'unknown';
+// Mirrors Prescription['cause'] in src/lib/loadPrescription.ts. Kept as a
+// separate literal type because coachHints predates the prescription
+// engine and was originally string-typed; widening here is the cheapest
+// fix that keeps the two compatible. 'time_to_progress' is applied by the
+// stall-nudge augment (applyStallNudge) — coachLineForPrescription falls
+// through to the normal 'progress' copy for it, since the dedicated
+// "time to add a little" line is rendered by the hero (the only place
+// stallWeeks is in scope).
+export type PrescriptionCause = 'failure' | 'low_energy' | 'rir' | 'time_to_progress' | 'unknown';
 
 /** Optional exercise name for per-exercise variety. When provided,
  *  selection inside each (rationale × band × cause) pool is seeded by

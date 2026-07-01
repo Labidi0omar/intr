@@ -1,0 +1,217 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --color-bg:       #000000;
+    --color-surface:  #0a0a0a;
+    --color-surface2: #111111;
+    --color-border:   #1F2937;
+    --color-border2:  #2d3748;
+    --color-sage:     #87A96B;
+    --color-sage-dim: #5d7a49;
+    --color-sage-glow:#a8c98a;
+    --color-muted:    #4B5563;
+    --color-text:     #E5E7EB;
+    --color-text-dim: #9CA3AF;
+    --color-text-faint: #4B5563;
+    --color-red:      #EF4444;
+    --color-amber:    #F59E0B;
+    --color-blue:     #60A5FA;
+    --color-purple:   #A78BFA;
+
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html, body, #root {
+    height: 100%;
+    background-color: var(--color-bg);
+    color: var(--color-text);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-border2);
+    border-radius: 2px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-muted);
+  }
+
+  .font-mono {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  }
+}
+
+@layer utilities {
+  .bg-surface { background-color: var(--color-surface); }
+  .bg-surface2 { background-color: var(--color-surface2); }
+  .border-dim { border-color: var(--color-border); }
+  .border-dim2 { border-color: var(--color-border2); }
+  .text-sage { color: var(--color-sage); }
+  .text-sage-glow { color: var(--color-sage-glow); }
+  .text-muted { color: var(--color-muted); }
+  .text-dim { color: var(--color-text-dim); }
+  .text-faint { color: var(--color-text-faint); }
+  .border-sage { border-color: var(--color-sage); }
+
+  .glow-sage {
+    box-shadow: 0 0 12px rgba(135, 169, 107, 0.15), 0 0 2px rgba(135, 169, 107, 0.3);
+  }
+  .glow-sage-sm {
+    box-shadow: 0 0 6px rgba(135, 169, 107, 0.12);
+  }
+
+  .card {
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+  .card:hover {
+    border-color: var(--color-border2);
+  }
+  .card-interactive:hover {
+    border-color: var(--color-sage-dim);
+    box-shadow: 0 0 8px rgba(135, 169, 107, 0.08);
+  }
+
+  .dot-pulse {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: var(--color-sage);
+    animation: pulse-dot 2s ease-in-out infinite;
+  }
+
+  .dot-amber {
+    background-color: var(--color-amber);
+  }
+  .dot-red {
+    background-color: var(--color-red);
+  }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.85); }
+  }
+
+  .animate-slide-in {
+    animation: slideInLeft 0.3s ease-out forwards;
+  }
+
+  @keyframes slideInLeft {
+    from { opacity: 0; transform: translateX(-8px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+
+  .fade-in {
+    animation: fadeIn 0.4s ease-out forwards;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .stream-item {
+    animation: streamIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  @keyframes streamIn {
+    from { opacity: 0; transform: translateX(12px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+
+  .nav-link {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-text-dim);
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    border: 1px solid transparent;
+    letter-spacing: 0.01em;
+  }
+  .nav-link:hover {
+    color: var(--color-text);
+    background-color: rgba(255,255,255,0.04);
+    border-color: var(--color-border);
+  }
+  .nav-link.active {
+    color: var(--color-sage);
+    background-color: rgba(135, 169, 107, 0.08);
+    border-color: rgba(135, 169, 107, 0.2);
+  }
+
+  .metric-value {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    line-height: 1;
+    color: var(--color-text);
+  }
+
+  .metric-label {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-text-dim);
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+  .badge-sage {
+    background: rgba(135, 169, 107, 0.12);
+    color: var(--color-sage);
+    border: 1px solid rgba(135, 169, 107, 0.2);
+  }
+  .badge-red {
+    background: rgba(239, 68, 68, 0.1);
+    color: #FCA5A5;
+    border: 1px solid rgba(239, 68, 68, 0.2);
+  }
+  .badge-amber {
+    background: rgba(245, 158, 11, 0.1);
+    color: #FCD34D;
+    border: 1px solid rgba(245, 158, 11, 0.2);
+  }
+  .badge-blue {
+    background: rgba(96, 165, 250, 0.1);
+    color: #93C5FD;
+    border: 1px solid rgba(96, 165, 250, 0.2);
+  }
+  .badge-purple {
+    background: rgba(167, 139, 250, 0.1);
+    color: #C4B5FD;
+    border: 1px solid rgba(167, 139, 250, 0.2);
+  }
+}

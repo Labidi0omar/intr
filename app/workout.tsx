@@ -1,8 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
+  BackHandler,
   FlatList,
   Image,
   KeyboardAvoidingView,
@@ -27,8 +28,10 @@ import Button from '../src/components/Button';
 import { EXERCISES } from '../src/constants/exercises';
 import { useTheme } from '../src/context/ThemeContext';
 import { supabase } from '../src/lib/supabase';
-import { layout, typography } from '../src/theme';
+import { layout, typography, elevation } from '../src/theme';
 import ShareCard from '../src/components/ShareCard';
+import MuscleDetails from '../src/components/MuscleDetails';
+import { getMuscleInfo } from '../src/constants/muscleInfo';
 import { track, getCompletedWorkoutCount } from '../src/lib/analytics';
 import { applyEnergyEffect, buildReadinessNarration, coachLineForPrescription, formatLowEnergyBanner, pickBanner, pickCoachHint, type BannerKind } from '../src/lib/coachHints';
 import { buildCampaignStatus } from '../src/lib/campaignStatus';
@@ -41,10 +44,17 @@ import { updateCoachMessageTextByFactSig } from '../src/lib/coachMessages';
 import { enqueuePendingSave, runFinishPersistence, type PendingSave } from '../src/lib/pendingSync';
 import { computeSessionPrs } from '../src/lib/prDetection';
 import { reportSilent } from '../src/lib/errorReporting';
-import { prescribeLoad, wasFollowed, hitTargetZone, type Prescription } from '../src/lib/loadPrescription';
+import { prescribeLoad, applyStallNudge, wasFollowed, hitTargetZone, type Prescription } from '../src/lib/loadPrescription';
+import { estimateStartingLoad, type Sex as StartingLoadSex } from '../src/lib/startingLoad';
+import {
+  buildPrescriptionHero,
+  type PrescriptionTone,
+} from '../src/lib/prescriptionPresenter';
 import { generateAdHocDay, isCompoundName, CURRENT_PLAN_VERSION, type AdHocWorkoutType } from '../src/lib/planGeneration';
 import { ensureCurrentWeekPlan } from '../src/lib/planSync';
 import { applySwapToRows, extractPlanDays } from '../src/lib/planSwap';
+import { secondFrameUrl } from '../src/lib/exerciseImage';
+import { abandonModalCopy } from '../src/lib/workoutAbandon';
 import { scheduleComebackNotification } from '../src/utils/notifications';
 import { normalizeMuscle } from '../src/utils/muscleGroups';
 
@@ -181,6 +191,12 @@ export default function WorkoutScreen() {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
   const router = useRouter();
+  // Used to register a `beforeRemove` listener for the workout screen so
+  // iOS swipe-back, the header back button, and any other expo-router
+  // navigation away (including programmatic `router.back()` from elsewhere)
+  // route through the Abandon confirmation modal instead of silently
+  // discarding the in-progress session.
+  const navigation = useNavigation();
   const params = useLocalSearchParams<{ energy_score?: string; intent_tag?: string; reflection?: string }>();
 
   const [loadingInitial, setLoadingInitial] = useState(true);
@@ -191,25 +207,12 @@ export default function WorkoutScreen() {
   const [phase, setPhase] = useState<Phase>('pre');
   const [energyScore, setEnergyScore] = useState<number>(3);
 
-  const microLine = useMemo(() => {
-    const paramScore = params.energy_score ? parseInt(params.energy_score, 10) : null;
-    const energy = paramScore && paramScore >= 1 && paramScore <= 5 ? paramScore : energyScore;
-    const intent = params.intent_tag as string | undefined;
-    if (energy <= 2) {
-      if (intent === 'push_through') return "Low energy noted. Keep the weight, drop a set if you need to.";
-      if (intent === 'go_easy') return "Low energy. Light session. That's the right call.";
-      if (intent === 'full_send') return "Low energy, full send flagged. Watch your form.";
-      return "Low energy noted. Keep the weight, drop a set if you need to.";
-    }
-    if (energy === 3) return "Solid baseline. Execute the plan.";
-    if (energy >= 4) {
-      if (intent === 'push_through') return "Sharp today. Don't leave sets on the floor.";
-      if (intent === 'go_easy') return "High energy, easy session. Use the surplus tomorrow.";
-      if (intent === 'full_send') return "Peak window. Controlled aggression.";
-      return "Sharp today. Don't leave sets on the floor.";
-    }
-    return "Check in complete. Start working.";
-  }, [params.energy_score, params.intent_tag, energyScore]);
+  // microLine (the energy + intent micro-banner) used to render on the
+  // active card alongside the COACH'S CALL hero and a "Coach:" line. The
+  // merge collapsed all three into the hero's single reason sentence —
+  // buildPrescriptionHero now takes energyScore and emits the energy
+  // framing inline. Removed here to avoid an orphaned useMemo recomputing
+  // on every energy/intent change.
 
   const [workout, setWorkout] = useState<Exercise[]>([]);
   const [exIndex, setExIndex] = useState(0);
@@ -241,6 +244,13 @@ export default function WorkoutScreen() {
     suggested_weight_kg: number;
     delta_pct: number;
     rationale: Prescription['rationale'];
+    /** Captured so the finish recap can differentiate failure vs
+     *  low-energy backoffs without re-reading the prescription engine. */
+    cause: Prescription['cause'];
+    /** What the engine read as the prior-session weight when this rx was
+     *  shown. Pinned at show-time so the recap shift ("80 → 85 kg") is
+     *  exact even if lastWeights state updates later in the session. */
+    last_weight_kg: number;
     energy_score: number;
   };
   const [shownPrescriptions, setShownPrescriptions] = useState<Record<string, ShownRx>>({});
@@ -250,6 +260,15 @@ export default function WorkoutScreen() {
   // surface a per-lift trend with RIR for the model — the data is already in
   // the query, this just keeps it through state instead of dropping it.
   const [exerciseHistory, setExerciseHistory] = useState<Record<string, { weight_kg: number; date: string; rir: number | null }[]>>({});
+  // Per-lift session-top weights (date → max kg), OLDEST-FIRST. Built from
+  // the same exercise_logs fetch that drives lastWeights/exerciseHistory.
+  // Feeds the stall-progression nudge (applyStallNudge) so a lift parked
+  // at the same top weight for ≥ STALL_WEEKS while actually trained earns
+  // a bump even when last RIR was a clean hold. The grouping uses
+  // logged_date as the session key — one session per day per exercise is
+  // the working assumption in this codebase, the same one coachObservations
+  // uses on the dashboard side.
+  const [liftSessionTops, setLiftSessionTops] = useState<Record<string, Array<{ topKg: number; date: string }>>>({});
   const [daysSinceSignup, setDaysSinceSignup] = useState<number>(0);
   // Position within the user's current mesocycle (1–4). Computed in
   // fetchTodayPlan from the earliest weekly_plans row (anchor) and the
@@ -276,6 +295,13 @@ export default function WorkoutScreen() {
   // Fitness level powers the beginner step-halving inside prescribeLoad so
   // the client's pre-fill matches what the server-side replanner computes.
   const [fitnessLevel, setFitnessLevel] = useState<'beginner' | 'intermediate' | 'advanced' | undefined>(undefined);
+  // Cold-start inputs (onboarding). Only used to seed session 1 via
+  // estimateStartingLoad when there is no log history yet — both can stay
+  // undefined and the seed degrades to null (calibration entry, no fake
+  // number). Once history exists, prescribeLoad takes over and these are
+  // ignored entirely.
+  const [bodyweightKg, setBodyweightKg] = useState<number | null>(null);
+  const [sex, setSex] = useState<StartingLoadSex | null>(null);
   // When user taps ⇄ on a pre-screen exercise row, this tracks which one.
   const [swapTargetIndex, setSwapTargetIndex] = useState<number | null>(null);
   const [addExerciseModalVisible, setAddExerciseModalVisible] = useState(false);
@@ -298,6 +324,46 @@ export default function WorkoutScreen() {
       return next;
     });
   };
+
+  // Two-frame demo for the active-exercise image. free-exercise-db ships
+  // start/end frames as /0.jpg and /1.jpg. Default state is STATIC (frame
+  // 0) — the user taps the ▶ button overlaid on the photo to animate the
+  // movement, ⏸ to stop. We read the active image via workout[exIndex]
+  // (declared above) because the `currentEx` alias is defined further
+  // down in the render body. The play state resets to paused on
+  // exercise change so every new lift starts as a still.
+  const activeImageUrl = workout[exIndex]?.imageUrl;
+  const [frameLoopPlaying, setFrameLoopPlaying] = useState(false);
+  const [frameToggle, setFrameToggle] = useState(false);
+  useEffect(() => {
+    setFrameLoopPlaying(false);
+    setFrameToggle(false);
+  }, [activeImageUrl]);
+  useEffect(() => {
+    if (!frameLoopPlaying) {
+      setFrameToggle(false);
+      return;
+    }
+    const second = secondFrameUrl(activeImageUrl);
+    if (!second) return;
+    if (brokenImageUrls.has(second)) return;
+    let interval: ReturnType<typeof setInterval> | null = null;
+    try {
+      interval = setInterval(() => setFrameToggle(prev => !prev), 1200);
+    } catch (e) {
+      reportSilent(e, 'workout:frameLoop');
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [frameLoopPlaying, activeImageUrl, brokenImageUrls]);
+  // True when the current exercise actually has a second frame to play —
+  // gates the play/pause button so we don't show a control that does
+  // nothing on single-position lifts (which only ship /0.jpg).
+  const hasSecondFrame = (() => {
+    const second = secondFrameUrl(activeImageUrl);
+    return !!second && !brokenImageUrls.has(second);
+  })();
 
   const clearRest = () => {
     if (restInterval.current) { clearInterval(restInterval.current); restInterval.current = null; }
@@ -341,19 +407,38 @@ export default function WorkoutScreen() {
   // arithmetic is in src/lib/loadPrescription.ts so it's unit-tested.
   const prescriptions = useMemo(() => {
     const out: Record<string, Prescription> = {};
+    // Fresh "today" at memo time so a session opened across midnight reads
+    // the right anchor for the stall-weeks computation. Same pattern as
+    // the other action-time todayStr sites in this file.
+    const todayIso = getTodayStr();
     for (const ex of preScreenReduction.exercises) {
       const last = lastWeights[ex.name];
       if (!last || !last.weight) continue;
-      out[ex.name] = prescribeLoad({
+      const isCompound = isCompoundName(ex.name);
+      const base = prescribeLoad({
         lastWeightKg: last.weight,
         lastRir: last.rir,
         energyScore,
-        isCompound: isCompoundName(ex.name),
+        isCompound,
         fitnessLevel,
+      });
+      // Additive: applyStallNudge passes the rx through unchanged unless
+      // every guard clears (would-hold + clean RIR + normal-or-high
+      // energy + flat ≥ STALL_WEEKS with real sessions in the run).
+      // Failure / low_energy / backoff cases bypass it by construction —
+      // see the guards inside the function.
+      out[ex.name] = applyStallNudge({
+        base,
+        liftHistory: liftSessionTops[ex.name] ?? [],
+        lastRir: last.rir,
+        energyScore,
+        isCompound,
+        fitnessLevel,
+        todayIso,
       });
     }
     return out;
-  }, [preScreenReduction.exercises, lastWeights, energyScore, fitnessLevel]);
+  }, [preScreenReduction.exercises, lastWeights, liftSessionTops, energyScore, fitnessLevel]);
 
   // Per-exercise coach hints memoized so we don't re-hash N names every render.
   // Every state (no_history, hold, progress, backoff, low-energy pulldown,
@@ -387,6 +472,19 @@ export default function WorkoutScreen() {
   // (weightLog state can lag the final commit; see weightLogRef).
   const [prWeights, setPrWeights] = useState<Record<string, number>>({});
   const [showShareCard, setShowShareCard] = useState(false);
+  const [showAbandonModal, setShowAbandonModal] = useState(false);
+  const [showMuscleDetails, setShowMuscleDetails] = useState(false);
+
+  // When the user confirms "Abandon", we intentionally navigate away —
+  // but our own beforeRemove listener will fire on that navigation and
+  // would re-intercept it, leaving the user stuck in a modal loop. This
+  // ref short-circuits the listener on the next removal.
+  const abandonBypassRef = useRef(false);
+  // Mirror of `showAbandonModal` for the synchronous BackHandler check.
+  // The native listener fires outside of React's render cycle, so it
+  // can't read state directly without re-subscribing on every change.
+  const modalOpenRef = useRef(false);
+  useEffect(() => { modalOpenRef.current = showAbandonModal; }, [showAbandonModal]);
 
 
   // Render-time only — safe for display props (banner, ShareCard date).
@@ -480,7 +578,7 @@ export default function WorkoutScreen() {
       try {
         const { data: profileRow } = await supabase
           .from('profiles')
-          .select('created_at, fitness_level')
+          .select('created_at, fitness_level, bodyweight_kg, sex')
           .eq('id', user.id)
           .maybeSingle();
         if (profileRow?.created_at) {
@@ -490,6 +588,18 @@ export default function WorkoutScreen() {
         }
         if (profileRow?.fitness_level) {
           setFitnessLevel(profileRow.fitness_level as 'beginner' | 'intermediate' | 'advanced');
+        }
+        // Bodyweight + sex are both NULL-able by design. Only push to state
+        // when present — the seed helper treats null identically to "user
+        // skipped", and that is the desired fallback path.
+        const bw = (profileRow as { bodyweight_kg?: number | string | null } | null)?.bodyweight_kg;
+        if (bw != null) {
+          const n = typeof bw === 'string' ? Number(bw) : bw;
+          if (Number.isFinite(n)) setBodyweightKg(n as number);
+        }
+        const sx = (profileRow as { sex?: string | null } | null)?.sex;
+        if (sx === 'male' || sx === 'female' || sx === 'unspecified') {
+          setSex(sx);
         }
       } catch (e) {
         // Non-fatal — banner will default to no first-week treatment.
@@ -513,6 +623,10 @@ export default function WorkoutScreen() {
         if (logs) {
           const latest: Record<string, { weight: number; date: string; rir: number | null }> = {};
           const grouped: Record<string, { weight_kg: number; date: string; rir: number | null }[]> = {};
+          // Date-keyed max kg per exercise — used to feed applyStallNudge.
+          // logged_date IS the session key (one session per day per
+          // exercise) so a Map<date, maxKg> collapses N sets to 1 entry.
+          const tops: Record<string, Map<string, number>> = {};
           for (const row of logs as any[]) {
             if (!(row.exercise_name in latest)) {
               latest[row.exercise_name] = {
@@ -529,9 +643,25 @@ export default function WorkoutScreen() {
                 rir: row.reps_in_reserve ?? null,
               });
             }
+            const w = Number(row.weight_kg);
+            if (Number.isFinite(w) && w > 0 && row.logged_date) {
+              if (!tops[row.exercise_name]) tops[row.exercise_name] = new Map();
+              const cur = tops[row.exercise_name].get(row.logged_date) ?? 0;
+              if (w > cur) tops[row.exercise_name].set(row.logged_date, w);
+            }
           }
           setLastWeights(latest);
           setExerciseHistory(grouped);
+          // Convert each date-map to an oldest-first array — the order
+          // applyStallNudge expects (it sorts internally too, but
+          // pre-sorting here keeps the contract explicit).
+          const topsArr: Record<string, Array<{ topKg: number; date: string }>> = {};
+          for (const [name, m] of Object.entries(tops)) {
+            topsArr[name] = Array.from(m.entries())
+              .map(([date, topKg]) => ({ date, topKg }))
+              .sort((a, b) => a.date.localeCompare(b.date));
+          }
+          setLiftSessionTops(topsArr);
         }
       } catch (e) {
         // Non-fatal — hints will fall back to first-time copy.
@@ -779,13 +909,28 @@ export default function WorkoutScreen() {
   const currentEx = workout[exIndex];
 
   const handleNextExercise = () => {
+    setShowMuscleDetails(false);
     setWeightPhaseForEx(exIndex);
     // Pre-fill with the prescription if we have one — that's the coach
-    // actually doing the math. Falls back to last logged weight, then empty.
+    // actually doing the math. Falls back to last logged weight, then to a
+    // conservative starting-strength SEED on the cold-start path (no history
+    // yet) so the user never stares at a blank box on session 1. The seed
+    // returns null whenever it can't be honest about the number (bodyweight
+    // unknown, lift isn't a recognised compound) — that case stays blank,
+    // which is the calibration entry the UI labels as "find your numbers".
     const exName = workout[exIndex]?.name;
     const rx = exName ? prescriptions[exName] : undefined;
     const last = exName ? lastWeights[exName]?.weight : undefined;
-    const seed = rx ? rx.suggestedWeightKg : last;
+    let seed: number | undefined = rx ? rx.suggestedWeightKg : last;
+    if (seed === undefined && exName && fitnessLevel) {
+      const startSeed = estimateStartingLoad({
+        level: fitnessLevel,
+        bodyweightKg,
+        sex,
+        liftName: exName,
+      });
+      if (startSeed != null) seed = startSeed;
+    }
     setCurrentWeightInput(seed !== undefined ? String(seed) : '');
 
     // RIR is intentionally NOT seeded here. The legacy behavior pre-selected
@@ -804,6 +949,8 @@ export default function WorkoutScreen() {
         suggested_weight_kg: rx.suggestedWeightKg,
         delta_pct: rx.deltaPct,
         rationale: rx.rationale,
+        cause: rx.cause,
+        last_weight_kg: lastWeights[exName]?.weight ?? rx.suggestedWeightKg,
         energy_score: energyScore,
       };
       setShownPrescriptions(prev => ({ ...prev, [exName]: snapshot }));
@@ -891,6 +1038,88 @@ export default function WorkoutScreen() {
       finishWorkout();
     }
   };
+
+  /**
+   * Abandon = DISCARD + EXIT. NOT a completion path. The previous
+   * implementation called finishWorkout() when any set had been logged,
+   * which marked the session completed:true and persisted it — turning
+   * the user's "I want out" into "this workout is done" (broken streak
+   * vs. legitimately-not-trained day, spurious recap, etc.).
+   *
+   * Logs are only persisted by runFinishPersistence inside finishWorkout,
+   * so abandon has no remote rollback to do — the entire discard is a
+   * local in-memory clear of weightLogRef / rirLogRef and the mirrored
+   * React state. The navigation step bypasses our own beforeRemove
+   * listener via abandonBypassRef so the user isn't trapped in a loop
+   * by their own confirm tap.
+   */
+  const confirmAbandon = () => {
+    setShowAbandonModal(false);
+    try {
+      // Stop any in-flight rest timer — otherwise a late tick can call
+      // setRestLeft after we've left the screen.
+      clearRest();
+      // Clear in-memory logs so a re-entry into the workout flow this
+      // same JS session doesn't surface a stale prescription seeded
+      // from this abandoned attempt.
+      weightLogRef.current = {};
+      rirLogRef.current = {};
+      setWeightLog({});
+      setRirLog({});
+    } catch (e) {
+      reportSilent(e, 'workout:confirmAbandon:clear');
+    }
+    abandonBypassRef.current = true;
+    try {
+      router.replace('/(tabs)/home');
+    } catch (e) {
+      reportSilent(e, 'workout:confirmAbandon:navigate');
+    }
+  };
+
+  // Intercept iOS swipe-back, header back, and any programmatic
+  // navigation away while the workout is in progress (pre or active
+  // phase). The 'complete' phase explicitly skips this so the user
+  // can navigate back from their finished-session card normally.
+  useEffect(() => {
+    if (phase === 'complete') return;
+    const sub = navigation.addListener('beforeRemove', (e: any) => {
+      if (abandonBypassRef.current) return;
+      try {
+        e?.preventDefault?.();
+      } catch (err) {
+        reportSilent(err, 'workout:beforeRemove:preventDefault');
+      }
+      setShowAbandonModal(true);
+    });
+    return () => {
+      try {
+        sub();
+      } catch (e) {
+        reportSilent(e, 'workout:beforeRemove:cleanup');
+      }
+    };
+  }, [navigation, phase]);
+
+  // Android hardware back. When the modal is already open we let the
+  // default fire so the modal closes itself via its onRequestClose
+  // (matching the iOS swipe behavior on a dismissible sheet); otherwise
+  // we open the modal and block the default pop.
+  useEffect(() => {
+    if (phase === 'complete') return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (modalOpenRef.current) return false;
+      setShowAbandonModal(true);
+      return true;
+    });
+    return () => {
+      try {
+        sub.remove();
+      } catch (e) {
+        reportSilent(e, 'workout:backHandler:cleanup');
+      }
+    };
+  }, [phase]);
 
   const finishWorkout = async () => {
     // FIX 3: stop any running rest interval before we transition to 'complete'.
@@ -1095,7 +1324,10 @@ export default function WorkoutScreen() {
             // ── AI voice upgrade. No-op when COACH_AI_VOICE is off. Fires
             // in the background; the upgraded line surfaces the next time
             // the dashboard card re-renders (typically when the user
-            // navigates back to home).
+            // navigates back to home). userName not threaded here — the
+            // workout screen doesn't load username into state, and PR
+            // observations are rare; the home focus rephrase picks them
+            // up from cache with the name on next open if needed.
             void runCoachVoiceUpgrade(prUser.id, appendedObs, updateCoachMessageTextByFactSig);
           }
         }
@@ -1372,7 +1604,7 @@ export default function WorkoutScreen() {
           <Text
             style={{
               fontFamily: typography.family.heading,
-              fontSize: 24,
+              fontSize: typography.size.s24,
               lineHeight: 30,
               color: colors.textPrimary,
               textAlign: 'center',
@@ -1384,7 +1616,7 @@ export default function WorkoutScreen() {
           <Text
             style={{
               fontFamily: typography.family.body,
-              fontSize: 15,
+              fontSize: typography.size.s15,
               lineHeight: 22,
               color: colors.textSecondary,
               textAlign: 'center',
@@ -1405,7 +1637,7 @@ export default function WorkoutScreen() {
               <Text
                 style={{
                   fontFamily: typography.family.body,
-                  fontSize: 11,
+                  fontSize: typography.size.s11,
                   color: colors.textMuted,
                   textTransform: 'uppercase',
                   letterSpacing: 1,
@@ -1436,7 +1668,7 @@ export default function WorkoutScreen() {
                       width: '31%',
                       paddingVertical: 18,
                       paddingHorizontal: 8,
-                      borderRadius: 12,
+                      borderRadius: layout.radii.r12,
                       borderWidth: 1,
                       borderColor: colors.cardBorder,
                       backgroundColor: colors.surface,
@@ -1447,7 +1679,7 @@ export default function WorkoutScreen() {
                     <Text
                       style={{
                         fontFamily: typography.family.bodyMedium,
-                        fontSize: 14,
+                        fontSize: typography.size.s14,
                         color: colors.textPrimary,
                         textAlign: 'center',
                       }}
@@ -1460,7 +1692,7 @@ export default function WorkoutScreen() {
               <Text
                 style={{
                   fontFamily: typography.family.body,
-                  fontSize: 11,
+                  fontSize: typography.size.s11,
                   color: colors.textMuted,
                   textAlign: 'center',
                   marginTop: 12,
@@ -1774,7 +2006,7 @@ export default function WorkoutScreen() {
                 style={{
                   width: 64,
                   height: 64,
-                  borderRadius: 32,
+                  borderRadius: layout.radii.r32,
                   backgroundColor: colors.surface,
                   justifyContent: 'center',
                   alignItems: 'center',
@@ -1787,7 +2019,7 @@ export default function WorkoutScreen() {
                   borderColor: colors.cardBorder,
                 }}
               >
-                <Text style={{ fontFamily: typography.family.heading, fontSize: 28, color: colors.accentTeal }}>L</Text>
+                <Text style={{ fontFamily: typography.family.heading, fontSize: typography.size.s28, color: colors.accentTeal }}>L</Text>
               </Animated.View>
             </View>
 
@@ -1805,7 +2037,7 @@ export default function WorkoutScreen() {
                   marginTop: layout.spacing.sm,
                   marginHorizontal: layout.spacing.lg,
                   padding: layout.spacing.md,
-                  borderRadius: 12,
+                  borderRadius: layout.radii.r12,
                   borderWidth: 1,
                   borderColor: colors.accentAmber,
                   backgroundColor: colors.surface,
@@ -1814,7 +2046,7 @@ export default function WorkoutScreen() {
                 <Text
                   style={{
                     fontFamily: typography.family.bodyMedium,
-                    fontSize: 13,
+                    fontSize: typography.size.s13,
                     color: colors.accentAmber,
                     textTransform: 'uppercase',
                     letterSpacing: 1,
@@ -1826,7 +2058,7 @@ export default function WorkoutScreen() {
                 <Text
                   style={{
                     fontFamily: typography.family.body,
-                    fontSize: 14,
+                    fontSize: typography.size.s14,
                     color: colors.textPrimary,
                     lineHeight: 20,
                   }}
@@ -1911,7 +2143,7 @@ export default function WorkoutScreen() {
                   </View>
                   {weightLog[ex.name] && (
                     <View style={styles.exSummaryCheck}>
-                      <Text style={{ color: colors.accentTeal, fontSize: 16 }}>✓</Text>
+                      <Text style={{ color: colors.accentTeal, fontSize: typography.size.s16 }}>✓</Text>
                     </View>
                   )}
                 </View>
@@ -1934,7 +2166,7 @@ export default function WorkoutScreen() {
               activeOpacity={0.7}
               style={{ alignItems: 'center', paddingVertical: layout.spacing.sm }}
             >
-              <Text style={{ fontFamily: typography.family.body, fontSize: 11, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 1 }}>
+              <Text style={{ fontFamily: typography.family.body, fontSize: typography.size.s11, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 1 }}>
                 SHARE SESSION
               </Text>
             </TouchableOpacity>
@@ -2054,7 +2286,7 @@ export default function WorkoutScreen() {
                   }]}>
                     <Text style={{
                       fontFamily: typography.family.heading,
-                      fontSize: 20,
+                      fontSize: typography.size.s20,
                       color: colors.accentTeal,
                       letterSpacing: 1,
                     }}>
@@ -2095,6 +2327,17 @@ export default function WorkoutScreen() {
                     THIS SESSION
                   </Text>
 
+                  {/* Cold-start label: when there is NO prior log AND no
+                      prescription, the seed in the input came from
+                      estimateStartingLoad (a conservative guess from
+                      bodyweight). Be explicit about that so the user reads
+                      the number as a starting point, not a prescription. */}
+                  {last === undefined && !prescriptions[exName] && currentWeightInput.trim() !== '' && (
+                    <Text style={[styles.weightLabel, { color: colors.accentTeal, marginBottom: layout.spacing.sm, textTransform: 'none', letterSpacing: 0 }]}>
+                      Starting guess — find a set with about 2 reps left, then rate it.
+                    </Text>
+                  )}
+
                   <TextInput
                     style={[
                       styles.weightInputRedesign,
@@ -2130,20 +2373,10 @@ export default function WorkoutScreen() {
                     </View>
                   )}
 
-                  {/* Prescription rationale — explains the pre-fill so the
-                      user sees the coach reasoning, not a magic number.
-                      Same voice as the pre-screen list: a swapped-in lift
-                      with no prescription gets the no_history calibration
-                      line instead of going blank, and a low-energy backoff
-                      gets energy-framed copy, not the failure line. */}
-                  <Text style={[styles.prescriptionNote, { color: colors.accentTeal }]}>
-                    {coachLineForPrescription(prescriptions[exName], {
-                      exerciseName: exName,
-                      lastWeightKg: last,
-                      energyScore,
-                      blockWeek,
-                    })}
-                  </Text>
+                  {/* COACH'S CALL used to live here — it now renders on
+                      the active exercise card BEFORE the set, where it can
+                      actually inform the load instead of arriving after
+                      the user already picked a weight. */}
 
                   {/* RIR capture — single tap commits the set. Each chip
                       records weight + RIR and advances; tapping a chip IS
@@ -2271,9 +2504,20 @@ export default function WorkoutScreen() {
         );
       })()}
 
-      {/* Progress bar */}
-      <View style={[styles.progressBar, { backgroundColor: colors.surface }]}>
-        <View style={[styles.progressFill, { width: `${progressPct * 100}%`, backgroundColor: colors.accentTeal }]} />
+      {/* Top bar: abandon button + progress bar */}
+      <View style={styles.activeTopBar}>
+        <TouchableOpacity
+          onPress={() => setShowAbandonModal(true)}
+          activeOpacity={0.6}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          accessibilityRole="button"
+          accessibilityLabel="Abandon workout"
+        >
+          <Text style={[styles.abandonBtnText, { color: colors.textMuted }]}>✕</Text>
+        </TouchableOpacity>
+        <View style={[styles.progressBar, { backgroundColor: colors.surface }]}>
+          <View style={[styles.progressFill, { width: `${progressPct * 100}%`, backgroundColor: colors.accentTeal }]} />
+        </View>
       </View>
 
       {/* Rest timer — prominent centered card, only rendered while resting.
@@ -2296,32 +2540,80 @@ export default function WorkoutScreen() {
         </View>
       )}
 
-      <View style={[styles.activeContainer, { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 32 }]}>
-        {/* Exercise image — falls back to a neutral placeholder block when
-            the remote URL 404s or fails to load. The placeholder keeps the
-            card layout stable; without it a broken image was rendering as
-            either a blank slot or a stale frame. */}
-        {currentEx.imageUrl && (
-          brokenImageUrls.has(currentEx.imageUrl) ? (
-            <View
-              style={[
-                styles.exerciseImageActive,
-                { backgroundColor: colors.surface, justifyContent: 'center', alignItems: 'center' },
-              ]}
-            >
-              <Text style={{ color: colors.textSecondary, fontSize: 12 }}>
-                {currentEx.name}
-              </Text>
+      <ScrollView
+        style={[styles.activeContainer, { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 32 }]}
+        contentContainerStyle={{ justifyContent: 'space-between', flexGrow: 1 }}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Exercise image — STATIC by default (frame 0). The user taps
+            the ▶ button overlaid on the photo to animate between the
+            catalog's /0.jpg start and /1.jpg end frames, ⏸ to stop.
+            Single-position lifts (only /0.jpg) hide the button. Falls
+            back to a neutral name placeholder if 0.jpg is broken.
+            resizeMode="contain" letterboxes the figure against the
+            surfaceElevated background instead of cropping it. */}
+        {currentEx.imageUrl && (() => {
+          const frame0 = currentEx.imageUrl;
+          const frame1 = secondFrameUrl(frame0);
+          if (brokenImageUrls.has(frame0)) {
+            return (
+              <View
+                style={[
+                  styles.exerciseImageActive,
+                  { backgroundColor: colors.surface, justifyContent: 'center', alignItems: 'center' },
+                ]}
+              >
+                <Text style={{ color: colors.textSecondary, fontSize: typography.size.s12 }}>
+                  {currentEx.name}
+                </Text>
+              </View>
+            );
+          }
+          const showSecond =
+            !!frame1 &&
+            !brokenImageUrls.has(frame1) &&
+            frameLoopPlaying &&
+            frameToggle;
+          const uri = showSecond ? (frame1 as string) : frame0;
+          return (
+            <View style={styles.exerciseImageWrap}>
+              <Image
+                source={{ uri }}
+                style={styles.exerciseImageActive}
+                resizeMode="contain"
+                onError={() => markImageBroken(uri)}
+              />
+              {hasSecondFrame ? (
+                <TouchableOpacity
+                  style={[
+                    styles.exerciseImagePlayBtn,
+                    { backgroundColor: colors.surface, borderColor: colors.cardBorder },
+                  ]}
+                  onPress={() => setFrameLoopPlaying(p => !p)}
+                  activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    frameLoopPlaying ? 'Pause exercise demo' : 'Play exercise demo'
+                  }
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Text
+                    style={[
+                      styles.exerciseImagePlayGlyph,
+                      { color: colors.textPrimary },
+                      // The ▶ triangle has more weight on its left edge —
+                      // nudge it 1px right so it reads optically centered
+                      // inside the circle. ⏸ is symmetric, no nudge.
+                      !frameLoopPlaying && { marginLeft: 2 },
+                    ]}
+                  >
+                    {frameLoopPlaying ? '⏸' : '▶'}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
-          ) : (
-            <Image
-              source={{ uri: currentEx.imageUrl }}
-              style={styles.exerciseImageActive}
-              resizeMode="cover"
-              onError={() => markImageBroken(currentEx.imageUrl!)}
-            />
-          )
-        )}
+          );
+        })()}
 
         {/* Title row — name on the left, swap icon on the right */}
         <View style={styles.activeTitleRow}>
@@ -2357,25 +2649,104 @@ export default function WorkoutScreen() {
           );
         })()}
 
-        {/* Per-exercise coach hint — same teal prefix as the pre-screen so
-            the user reads it as the same voice. Skipped when absent so we
-            never show a dangling "Coach:" label. */}
-        {coachHints[currentEx.name] ? (
-          // Cap raised from 2 → 4 lines to match the pre-screen list
-          // (sessionHint at ~1547). The coach line composes prescription
-          // copy + the optional "Week N on this lift…" block-week
-          // suffix; two lines clipped the tail on long compounds.
-          <Text style={styles.activeCoachHint} numberOfLines={4}>
-            <Text style={{ color: colors.accentTeal }}>Coach: </Text>
-            <Text style={{ color: colors.textSecondary }}>{coachHints[currentEx.name]}</Text>
-          </Text>
-        ) : null}
+        {/* COACH'S CALL — the prescription hero, surfaced on the active
+            exercise card BEFORE the user starts the set. Previously this
+            lived in the post-set weight popup, but it was telling the
+            user what to load AFTER they'd already loaded the bar. The
+            popup now just captures the RIR; the headline (kg + delta +
+            cause) lives here, where it can actually inform the load. */}
+        {(() => {
+          const exName = currentEx.name;
+          const lastKg = lastWeights[exName]?.weight;
+          const rx = prescriptions[exName];
+          // Bodyweight lifts don't run through the prescription engine —
+          // their coachHints line carries form cues instead. Skip the
+          // hero so we don't show a dead "calibrating" block on every
+          // bodyweight set.
+          if ((currentEx.equipment ?? '').toLowerCase() === 'bodyweight') return null;
+          // Cold start with no rx AND no history is rendered as the
+          // "calibrating" line lower down (coachHints) — no point in a
+          // second, content-free hero block above it.
+          if (!rx && !lastKg) return null;
+          const hero = buildPrescriptionHero({
+            rx,
+            lastWeightKg: lastKg,
+            hasLastRir: lastWeights[exName]?.rir != null,
+            // Energy modulates the hold/low_energy branches. The
+            // presenter weaves the kg into the reason directly, so the
+            // single sentence here replaces both the old separate
+            // "Coach:" line (energy framing + rep directive) and the
+            // micro-line (energy banner). The active card now renders
+            // ONE coach block, not three.
+            energyScore,
+          });
+          const accent =
+            hero.tone === 'progress' ? colors.accentTeal :
+            hero.tone === 'backoff'  ? colors.accentCoral :
+            colors.textSecondary;
+          return (
+            <View
+              style={[styles.prescriptionHero, { borderLeftColor: accent }]}
+              accessibilityRole="text"
+              accessibilityLabel={
+                hero.weightLabel
+                  ? `Coach's call: ${hero.weightLabel}, ${hero.deltaLabel}. ${hero.reason}`
+                  : `Coach's call: ${hero.reason}`
+              }
+            >
+              <Text style={[styles.prescriptionHeroKicker, { color: accent }]}>
+                COACH'S CALL
+              </Text>
+              {hero.weightLabel ? (
+                <View style={styles.prescriptionHeroRow}>
+                  <Text style={[styles.prescriptionHeroWeight, { color: colors.textPrimary }]}>
+                    {hero.weightLabel}
+                  </Text>
+                  <Text style={[styles.prescriptionHeroDelta, { color: accent }]}>
+                    {hero.deltaLabel}
+                  </Text>
+                </View>
+              ) : null}
+              <Text style={[styles.prescriptionHeroReason, { color: colors.textSecondary }]}>
+                {hero.reason}
+              </Text>
+            </View>
+          );
+        })()}
 
-        {/* Micro-line */}
-        <Text style={[styles.microLine, { color: colors.textMuted }]}>{microLine}</Text>
+        {/* The COACH'S CALL hero above is the ONLY coach voice on the
+            active card. Energy framing and the rep directive used to
+            live in a separate "Coach:" line (coachLineForPrescription)
+            and a micro-line; both are now folded into the hero's single
+            reason sentence via buildPrescriptionHero({ energyScore }).
+            coachHints is still computed for the pre-screen exercise list
+            but is intentionally NOT rendered here — one block, one
+            voice, no contradictions between sentences. */}
 
         {/* Muscle group label */}
         <Text style={[styles.muscleTag, { color: colors.textMuted }]}>{currentEx.primaryMuscle.toUpperCase()}</Text>
+
+        {getMuscleInfo(currentEx.primaryMuscle) && (
+          <TouchableOpacity
+            style={[styles.detailsBtn, { borderColor: colors.cardBorder }]}
+            onPress={() => {
+              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+              setShowMuscleDetails(v => !v);
+            }}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.detailsBtnText, { color: colors.accentTeal }]}>
+              {showMuscleDetails ? 'Hide details' : 'Details'}
+            </Text>
+          </TouchableOpacity>
+        )}
+
+        {/* Expandable muscle details card */}
+        {showMuscleDetails && getMuscleInfo(currentEx.primaryMuscle) && (
+          <View style={[styles.muscleDetailsCard, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
+            <MuscleDetails muscle={currentEx.primaryMuscle} />
+          </View>
+        )}
 
         <View style={{ flex: 1 }} />
 
@@ -2387,7 +2758,53 @@ export default function WorkoutScreen() {
         >
           <Text style={styles.nextExBtnText}>NEXT EXERCISE</Text>
         </TouchableOpacity>
-      </View>
+      </ScrollView>
+
+      {/* Abandon confirmation modal. Copy and labels come from
+          src/lib/workoutAbandon so the tested promise ("won't be saved")
+          can't drift from what the screen actually shows. */}
+      {(() => {
+        const copy = abandonModalCopy({
+          hasLoggedSets: Object.keys(weightLogRef.current).length > 0,
+        });
+        return (
+          <Modal
+            visible={showAbandonModal}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setShowAbandonModal(false)}
+          >
+            <View style={styles.abandonOverlay}>
+              <View style={[styles.abandonCard, { backgroundColor: colors.surface }]}>
+                <Text style={[styles.abandonTitle, { color: colors.textPrimary }]}>
+                  {copy.title}
+                </Text>
+                <Text style={[styles.abandonBody, { color: colors.textSecondary }]}>
+                  {copy.body}
+                </Text>
+                <View style={styles.abandonActions}>
+                  <TouchableOpacity
+                    style={[styles.abandonCancelBtn, { borderColor: colors.cardBorder }]}
+                    onPress={() => setShowAbandonModal(false)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.abandonCancelText, { color: colors.textPrimary }]}>
+                      {copy.cancelLabel}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.abandonConfirmBtn, { backgroundColor: colors.accentRed }]}
+                    onPress={confirmAbandon}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.abandonConfirmText}>{copy.confirmLabel}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </Modal>
+        );
+      })()}
     </SafeAreaView>
   );
 }
@@ -2411,7 +2828,7 @@ function makeStyles(colors: any) {
     },
     energyHint: {
       fontFamily: typography.family.body,
-      fontSize: 12,
+      fontSize: typography.size.s12,
       color: colors.textSecondary,
       marginBottom: layout.spacing.sm,
       lineHeight: 17,
@@ -2436,25 +2853,25 @@ function makeStyles(colors: any) {
     },
     readinessKicker: {
       fontFamily: typography.family.bodyMedium,
-      fontSize: 11,
+      fontSize: typography.size.s11,
       letterSpacing: 1.6,
       marginBottom: 6,
     },
     readinessBody: {
       fontFamily: typography.family.body,
-      fontSize: 14,
+      fontSize: typography.size.s14,
       lineHeight: 20,
       letterSpacing: 0.1,
     },
     coachBannerTitle: {
       fontFamily: typography.family.bodyMedium,
-      fontSize: 11,
+      fontSize: typography.size.s11,
       letterSpacing: 2,
       marginBottom: 6,
     },
     coachBannerBody: {
       fontFamily: typography.family.body,
-      fontSize: 13,
+      fontSize: typography.size.s13,
       lineHeight: 19,
       color: colors.textSecondary,
     },
@@ -2472,12 +2889,12 @@ function makeStyles(colors: any) {
     },
     coachActionText: {
       fontFamily: typography.family.bodyMedium,
-      fontSize: 11,
+      fontSize: typography.size.s11,
       letterSpacing: 0.5,
     },
     sessionHeader: {
       fontFamily: typography.family.bodyMedium,
-      fontSize: 11,
+      fontSize: typography.size.s11,
       letterSpacing: 2,
       marginTop: layout.spacing.xl,
       marginBottom: layout.spacing.sm,
@@ -2507,19 +2924,19 @@ function makeStyles(colors: any) {
     sessionExName: {
       flex: 1,
       fontFamily: typography.family.heading,
-      fontSize: 14,
+      fontSize: typography.size.s14,
       letterSpacing: -0.2,
       color: colors.textPrimary,
     },
     sessionExSetsReps: {
       fontFamily: typography.family.body,
-      fontSize: 12,
+      fontSize: typography.size.s12,
       color: colors.textSecondary,
       fontVariant: ['tabular-nums'],
     },
     sessionHint: {
       fontFamily: typography.family.body,
-      fontSize: 11.5,
+      fontSize: typography.size.s11_5,
       color: colors.textMuted,
       lineHeight: 16,
     },
@@ -2528,7 +2945,7 @@ function makeStyles(colors: any) {
     // a slightly brighter base color since it lives on the dark surface.
     activeCoachHint: {
       fontFamily: typography.family.body,
-      fontSize: 12,
+      fontSize: typography.size.s12,
       lineHeight: 17,
       marginTop: 6,
       textAlign: 'center',
@@ -2537,7 +2954,7 @@ function makeStyles(colors: any) {
     swapIconBtn: {
       width: 36,
       height: 36,
-      borderRadius: 18,
+      borderRadius: layout.radii.r18,
       borderWidth: 1,
       borderColor: colors.cardBorder,
       alignItems: 'center',
@@ -2545,7 +2962,7 @@ function makeStyles(colors: any) {
     },
     swapIconText: {
       fontFamily: typography.family.heading,
-      fontSize: 16,
+      fontSize: typography.size.s16,
       color: colors.textSecondary,
     },
     preTitle: {
@@ -2556,14 +2973,14 @@ function makeStyles(colors: any) {
     },
     preSubtitle: {
       fontFamily: typography.family.body,
-      fontSize: 11,
+      fontSize: typography.size.s11,
       color: colors.textMuted,
       textTransform: 'uppercase',
       marginTop: 4,
     },
     energySectionLabel: {
       fontFamily: typography.family.bodyMedium,
-      fontSize: 11,
+      fontSize: typography.size.s11,
       letterSpacing: 2,
       textTransform: 'uppercase',
       marginBottom: layout.spacing.sm,
@@ -2584,7 +3001,7 @@ function makeStyles(colors: any) {
     },
     pill: {
       backgroundColor: colors.surface,
-      borderRadius: 2,
+      borderRadius: layout.radii.r2,
       paddingHorizontal: layout.spacing.md,
       paddingVertical: 6,
       borderWidth: 1,
@@ -2595,13 +3012,6 @@ function makeStyles(colors: any) {
       fontSize: typography.size.xs,
       color: colors.textSecondary,
     },
-    microLine: {
-      fontFamily: typography.family.body,
-      fontSize: 11,
-      textAlign: 'left',
-      marginTop: 4,
-      marginBottom: 2,
-    },
     // Energy selector
     energyRow: {
       flexDirection: 'row',
@@ -2611,7 +3021,7 @@ function makeStyles(colors: any) {
     energyBox: {
       width: 48,
       height: 48,
-      borderRadius: 2,
+      borderRadius: layout.radii.r2,
       backgroundColor: colors.surface,
       justifyContent: 'center',
       alignItems: 'center',
@@ -2625,7 +3035,7 @@ function makeStyles(colors: any) {
     },
     energyFeeling: {
       fontFamily: typography.family.body,
-      fontSize: 10,
+      fontSize: typography.size.s10,
       marginTop: 6,
       textAlign: 'center',
       textTransform: 'uppercase',
@@ -2646,25 +3056,25 @@ function makeStyles(colors: any) {
     },
     coachCtaArrow: {
       fontFamily: typography.family.heading,
-      fontSize: 12,
+      fontSize: typography.size.s12,
       color: colors.accentTeal,
     },
     coachCtaText: {
       fontFamily: typography.family.bodyMedium,
-      fontSize: 11,
+      fontSize: typography.size.s11,
       letterSpacing: 1.5,
       color: colors.accentTeal,
     },
     replannedBadge: {
       fontFamily: typography.family.bodyMedium,
-      fontSize: 10,
+      fontSize: typography.size.s10,
       letterSpacing: 2,
       color: colors.accentTeal,
       marginTop: layout.spacing.lg,
     },
     replanOverlay: {
       flex: 1,
-      backgroundColor: 'rgba(0,0,0,0.75)',
+      backgroundColor: colors.scrimHeavy,
       justifyContent: 'center',
       alignItems: 'center',
       paddingHorizontal: layout.spacing.lg,
@@ -2679,7 +3089,7 @@ function makeStyles(colors: any) {
     },
     replanEyebrow: {
       fontFamily: typography.family.bodyMedium,
-      fontSize: 10,
+      fontSize: typography.size.s10,
       letterSpacing: 2,
       color: colors.accentTeal,
       marginBottom: layout.spacing.sm,
@@ -2705,13 +3115,13 @@ function makeStyles(colors: any) {
     },
     replanChange: {
       fontFamily: typography.family.body,
-      fontSize: 13.5,
+      fontSize: typography.size.s13_5,
       color: colors.textPrimary,
       lineHeight: 20,
     },
     replanUsage: {
       fontFamily: typography.family.body,
-      fontSize: 10.5,
+      fontSize: typography.size.s10_5,
       letterSpacing: 1.5,
       color: colors.textMuted,
       marginBottom: layout.spacing.md,
@@ -2750,7 +3160,7 @@ function makeStyles(colors: any) {
     },
     workoutStartBtnText: {
       fontFamily: typography.family.heading,
-      fontSize: 13,
+      fontSize: typography.size.s13,
       color: colors.background,
       letterSpacing: 1,
       textTransform: 'uppercase',
@@ -2788,7 +3198,7 @@ function makeStyles(colors: any) {
     // Modal sheet
     modalOverlay: {
       flex: 1,
-      backgroundColor: 'rgba(0,0,0,0.6)',
+      backgroundColor: colors.scrimMedium,
       justifyContent: 'flex-end',
     },
     modalSheet: {
@@ -2804,7 +3214,7 @@ function makeStyles(colors: any) {
     modalHandle: {
       width: 36,
       height: 4,
-      borderRadius: 2,
+      borderRadius: layout.radii.r2,
       backgroundColor: colors.textMuted,
       alignSelf: 'center',
       marginBottom: layout.spacing.md,
@@ -2834,36 +3244,116 @@ function makeStyles(colors: any) {
     },
     progressBar: {
       height: 3,
-      borderRadius: 1.5,
-      marginHorizontal: layout.spacing.lg,
-      marginTop: layout.spacing.sm,
+      borderRadius: layout.radii.r1_5,
+      marginHorizontal: 0,
       overflow: 'hidden',
     },
     progressFill: {
       height: '100%',
-      borderRadius: 1.5,
+      borderRadius: layout.radii.r1_5,
+    },
+    activeTopBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: layout.spacing.lg,
+      paddingTop: layout.spacing.sm,
+      gap: 12,
+    },
+    abandonBtnText: {
+      fontSize: typography.size.s18,
+      fontWeight: '600',
+    },
+    abandonOverlay: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: colors.scrimMedium,
+      paddingHorizontal: 40,
+    },
+    abandonCard: {
+      borderRadius: layout.cardRadius,
+      padding: 24,
+      width: '100%',
+    },
+    abandonTitle: {
+      fontFamily: typography.family.heading,
+      fontSize: typography.size.md,
+      marginBottom: 8,
+    },
+    abandonBody: {
+      fontFamily: typography.family.body,
+      fontSize: typography.size.sm,
+      lineHeight: 20,
+      marginBottom: 20,
+    },
+    abandonActions: {
+      flexDirection: 'row',
+      gap: 12,
+    },
+    abandonCancelBtn: {
+      flex: 1,
+      paddingVertical: 14,
+      borderRadius: layout.pillRadius,
+      borderWidth: 1,
+      alignItems: 'center',
+    },
+    abandonCancelText: {
+      fontFamily: typography.family.bodyMedium,
+      fontSize: typography.size.sm,
+    },
+    abandonConfirmBtn: {
+      flex: 1,
+      paddingVertical: 14,
+      borderRadius: layout.pillRadius,
+      alignItems: 'center',
+    },
+    abandonConfirmText: {
+      fontFamily: typography.family.bodyMedium,
+      fontSize: typography.size.sm,
+      color: colors.textPrimary,
     },
     activeContainer: {
       flex: 1,
-      justifyContent: 'space-between',
       paddingTop: layout.spacing.lg,
+    },
+    exerciseImageWrap: {
+      position: 'relative',
+      marginBottom: layout.spacing.md,
     },
     exerciseImageActive: {
       width: '100%',
-      height: 220,
-      borderRadius: 2,
-      marginBottom: layout.spacing.md,
+      height: 240,
+      borderRadius: layout.radii.r2,
       backgroundColor: colors.surfaceElevated,
+    },
+    exerciseImagePlayBtn: {
+      position: 'absolute',
+      right: 10,
+      bottom: 10,
+      width: 36,
+      height: 36,
+      borderRadius: layout.radii.r18,
+      borderWidth: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      // Subtle lift so the button reads as floating over the photo
+      // regardless of which underlying frame the image is on.
+      shadowColor: colors.shadowColor,
+      ...elevation.button,
+    },
+    exerciseImagePlayGlyph: {
+      fontFamily: typography.family.heading,
+      fontSize: typography.size.s14,
     },
     activeExName: {
       fontFamily: typography.family.heading,
-      fontSize: 24,
+      fontSize: typography.size.s24,
       color: colors.textPrimary,
       marginBottom: 4,
     },
     activeExSetsReps: {
       fontFamily: typography.family.body,
-      fontSize: 14,
+      fontSize: typography.size.s14,
       color: colors.textSecondary,
       marginBottom: 2,
     },
@@ -2871,16 +3361,36 @@ function makeStyles(colors: any) {
       // Pre-set historical reference. Mid-weight (textMuted prefix, textSecondary
       // emphasis on the number) so it reads as data, not a coach prompt.
       fontFamily: typography.family.body,
-      fontSize: 13,
+      fontSize: typography.size.s13,
       lineHeight: 18,
       marginBottom: 6,
       letterSpacing: 0.1,
     },
     muscleTag: {
       fontFamily: typography.family.body,
-      fontSize: 11,
+      fontSize: typography.size.s11,
       color: colors.textMuted,
       textTransform: 'uppercase',
+    },
+    detailsBtn: {
+      alignSelf: 'flex-start',
+      marginTop: 10,
+      paddingVertical: 6,
+      paddingHorizontal: 12,
+      borderRadius: layout.smRadius,
+      borderWidth: 1,
+      backgroundColor: colors.surface,
+    },
+    detailsBtnText: {
+      fontFamily: typography.family.bodyMedium,
+      fontSize: typography.size.s12,
+      letterSpacing: 0.2,
+    },
+    muscleDetailsCard: {
+      marginTop: layout.spacing.md,
+      borderRadius: layout.cardRadius,
+      borderWidth: 1,
+      overflow: 'hidden',
     },
     activeTitleRow: {
       flexDirection: 'row',
@@ -2891,7 +3401,7 @@ function makeStyles(colors: any) {
     activeSwapIcon: {
       width: 40,
       height: 40,
-      borderRadius: 20,
+      borderRadius: layout.radii.r20,
       borderWidth: 1,
       borderColor: colors.cardBorder,
       backgroundColor: colors.surface,
@@ -2900,7 +3410,7 @@ function makeStyles(colors: any) {
     },
     activeSwapIconGlyph: {
       fontFamily: typography.family.heading,
-      fontSize: 18,
+      fontSize: typography.size.s18,
       color: colors.textSecondary,
     },
     nextExBtn: {
@@ -2911,7 +3421,7 @@ function makeStyles(colors: any) {
     },
     nextExBtnText: {
       fontFamily: typography.family.heading,
-      fontSize: 13,
+      fontSize: typography.size.s13,
       color: colors.background,
       letterSpacing: 1,
       textTransform: 'uppercase',
@@ -2925,13 +3435,13 @@ function makeStyles(colors: any) {
     },
     restTimerLabel: {
       fontFamily: typography.family.bodyMedium,
-      fontSize: 11,
+      fontSize: typography.size.s11,
       letterSpacing: 2,
       color: colors.textMuted,
     },
     restTimerCount: {
       fontFamily: typography.family.heading,
-      fontSize: 20,
+      fontSize: typography.size.s20,
       color: colors.accentTeal,
       flex: 1,
     },
@@ -2944,7 +3454,7 @@ function makeStyles(colors: any) {
     },
     restTimerBtnText: {
       fontFamily: typography.family.bodyMedium,
-      fontSize: 12,
+      fontSize: typography.size.s12,
       color: colors.textSecondary,
     },
     // ── Centered rest-timer overlay ─────────────────────────────────
@@ -2954,7 +3464,7 @@ function makeStyles(colors: any) {
       left: 0,
       right: 0,
       bottom: 0,
-      backgroundColor: 'rgba(0,0,0,0.6)',
+      backgroundColor: colors.scrimMedium,
       alignItems: 'center',
       justifyContent: 'center',
       zIndex: 90,
@@ -2971,14 +3481,14 @@ function makeStyles(colors: any) {
     },
     restTimerLabelBig: {
       fontFamily: typography.family.bodyMedium,
-      fontSize: 12,
+      fontSize: typography.size.s12,
       letterSpacing: 3,
       color: colors.textMuted,
       marginBottom: layout.spacing.sm,
     },
     restTimerCountBig: {
       fontFamily: typography.family.heading,
-      fontSize: 64,
+      fontSize: typography.size.s64,
       lineHeight: 68,
       color: colors.accentTeal,
       letterSpacing: 1,
@@ -2997,7 +3507,7 @@ function makeStyles(colors: any) {
     },
     restTimerBtnTextBig: {
       fontFamily: typography.family.bodyMedium,
-      fontSize: 14,
+      fontSize: typography.size.s14,
       color: colors.textSecondary,
       letterSpacing: 0.5,
     },
@@ -3007,7 +3517,7 @@ function makeStyles(colors: any) {
       left: 0,
       right: 0,
       bottom: 0,
-      backgroundColor: 'rgba(0,0,0,0.5)',
+      backgroundColor: colors.scrimSoft,
       zIndex: 100,
     },
     weightOverlayKav: {
@@ -3030,13 +3540,13 @@ function makeStyles(colors: any) {
     },
     weightExTitle: {
       fontFamily: typography.family.bodyMedium,
-      fontSize: 12,
+      fontSize: typography.size.s12,
       textTransform: 'uppercase',
       marginBottom: layout.spacing.md,
     },
     weightLabel: {
       fontFamily: typography.family.body,
-      fontSize: 10,
+      fontSize: typography.size.s10,
       letterSpacing: 1,
       marginBottom: layout.spacing.sm,
     },
@@ -3073,7 +3583,7 @@ function makeStyles(colors: any) {
     },
     rirChipText: {
       fontFamily: typography.family.bodyMedium,
-      fontSize: 11,
+      fontSize: typography.size.s11,
       color: colors.textMuted,
       letterSpacing: 0.5,
     },
@@ -3082,14 +3592,14 @@ function makeStyles(colors: any) {
     // footer afterthought. One tap on a chip logs the set with that RIR.
     rirHeader: {
       fontFamily: typography.family.heading,
-      fontSize: 18,
+      fontSize: typography.size.s18,
       letterSpacing: 0.2,
       marginBottom: 4,
       textAlign: 'left',
     },
     rirHelper: {
       fontFamily: typography.family.body,
-      fontSize: 12,
+      fontSize: typography.size.s12,
       lineHeight: 16,
       marginBottom: layout.spacing.md,
     },
@@ -3137,7 +3647,7 @@ function makeStyles(colors: any) {
       fontFamily: typography.family.heading,
       // 13px (down from 14) so 'Failed' fits comfortably on a 360px screen
       // with the keyboard up; adjustsFontSizeToFit handles the rest.
-      fontSize: 13,
+      fontSize: typography.size.s13,
       letterSpacing: 0.2,
       marginBottom: 2,
       textAlign: 'center',
@@ -3146,7 +3656,7 @@ function makeStyles(colors: any) {
       fontFamily: typography.family.body,
       // 10px sub stays clearly subordinate to the 13px label — the size
       // gap is what reads "secondary" in addition to the muted color.
-      fontSize: 10,
+      fontSize: typography.size.s10,
       lineHeight: 12,
       letterSpacing: 0.2,
       textAlign: 'center',
@@ -3161,21 +3671,57 @@ function makeStyles(colors: any) {
     },
     rirSecondaryText: {
       fontFamily: typography.family.body,
-      fontSize: 12,
+      fontSize: typography.size.s12,
       letterSpacing: 0.2,
       paddingVertical: 6,
     },
     rirSecondaryDivider: {
       fontFamily: typography.family.body,
-      fontSize: 14,
+      fontSize: typography.size.s14,
       opacity: 0.6,
     },
     prescriptionNote: {
       fontFamily: typography.family.bodyMedium,
-      fontSize: 12,
+      fontSize: typography.size.s12,
       letterSpacing: 0.3,
       marginTop: -layout.spacing.sm,
       marginBottom: layout.spacing.sm,
+    },
+    prescriptionHero: {
+      marginBottom: layout.spacing.md,
+      paddingVertical: layout.spacing.sm,
+      paddingHorizontal: layout.spacing.md,
+      borderLeftWidth: 3,
+      backgroundColor: colors.surface,
+      borderRadius: layout.smRadius,
+    },
+    prescriptionHeroKicker: {
+      fontFamily: typography.family.bodyMedium,
+      fontSize: typography.size.s10,
+      letterSpacing: 1.4,
+      textTransform: 'uppercase',
+      marginBottom: 6,
+    },
+    prescriptionHeroRow: {
+      flexDirection: 'row',
+      alignItems: 'baseline',
+      gap: 10,
+      marginBottom: 4,
+    },
+    prescriptionHeroWeight: {
+      fontFamily: typography.family.heading,
+      fontSize: typography.size.s24,
+      letterSpacing: -0.4,
+    },
+    prescriptionHeroDelta: {
+      fontFamily: typography.family.bodyMedium,
+      fontSize: typography.size.s12,
+      letterSpacing: 0.3,
+    },
+    prescriptionHeroReason: {
+      fontFamily: typography.family.body,
+      fontSize: typography.size.s13,
+      lineHeight: 18,
     },
     weightPill: {
       borderWidth: 1,
@@ -3189,7 +3735,7 @@ function makeStyles(colors: any) {
     },
     weightPillText: {
       fontFamily: typography.family.bodyMedium,
-      fontSize: 11,
+      fontSize: typography.size.s11,
       letterSpacing: 0.4,
       color: colors.textSecondary,
     },
@@ -3201,7 +3747,7 @@ function makeStyles(colors: any) {
       backgroundColor: colors.background,
       paddingHorizontal: layout.spacing.md,
       fontFamily: typography.family.heading,
-      fontSize: 20,
+      fontSize: typography.size.s20,
       textAlign: 'center',
       marginBottom: layout.spacing.md,
     },
@@ -3215,12 +3761,12 @@ function makeStyles(colors: any) {
     },
     weightConfirmText: {
       fontFamily: typography.family.heading,
-      fontSize: 12,
+      fontSize: typography.size.s12,
       letterSpacing: 1,
     },
     weightSkipText: {
       fontFamily: typography.family.body,
-      fontSize: 12,
+      fontSize: typography.size.s12,
       paddingVertical: 4,
     },
     // Swap options
@@ -3302,12 +3848,12 @@ function makeStyles(colors: any) {
       right: -40,
       width: 120,
       height: 120,
-      borderRadius: 60,
+      borderRadius: layout.radii.r60,
       backgroundColor: colors.accentAmber + '22',
     },
     prLabel: {
       fontFamily: typography.family.bodyMedium,
-      fontSize: 9.5,
+      fontSize: typography.size.s9_5,
       letterSpacing: 2,
       color: colors.accentAmber,
       marginBottom: 6,
@@ -3320,25 +3866,25 @@ function makeStyles(colors: any) {
     },
     prName: {
       fontFamily: typography.family.heading,
-      fontSize: 19,
+      fontSize: typography.size.s19,
       letterSpacing: -0.4,
       color: colors.textPrimary,
       flex: 1,
     },
     prWeight: {
       fontFamily: typography.family.heading,
-      fontSize: 22,
+      fontSize: typography.size.s22,
       letterSpacing: -0.5,
       color: colors.textPrimary,
     },
     prWeightUnit: {
       fontFamily: typography.family.body,
-      fontSize: 11,
+      fontSize: typography.size.s11,
       color: colors.textSecondary,
     },
     prDelta: {
       fontFamily: typography.family.bodyMedium,
-      fontSize: 10.5,
+      fontSize: typography.size.s10_5,
       letterSpacing: 0.4,
       color: colors.accentAmber,
       marginTop: 4,
@@ -3353,7 +3899,7 @@ function makeStyles(colors: any) {
     exSummaryIndex: {
       width: 24,
       height: 24,
-      borderRadius: 12,
+      borderRadius: layout.radii.r12,
       borderWidth: 1,
       borderColor: colors.cardBorder,
       justifyContent: 'center',

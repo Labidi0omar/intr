@@ -450,6 +450,9 @@ describe('ensureCurrentWeekPlan offline profile-inputs cache', () => {
       training_days: 4,
       preferred_split: 'upper_lower',
       fitness_level: 'advanced',
+      // Network row didn't carry training_weekdays → cached as null
+      // (legacy users / out-of-scope counts fall back to defaults).
+      training_weekdays: null,
     });
   });
 

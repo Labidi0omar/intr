@@ -117,7 +117,12 @@ A dev-only Sentry smoke test is wired to a long-press on the home-screen greetin
 
 ## Theme & Styling
 
-The theme is defined once in `src/theme/index.ts` and frozen (`Object.freeze`). Never mutate it. Access it via the exported `theme` object — there is no theme hook or context, just a direct import.
+The theme is defined once in `src/theme/index.ts` and frozen (`deepFreeze`). Never mutate it. There are two ways to read it, and they have different jobs:
+
+- **Colors** come from `useTheme()` (the `ThemeContext` at [src/context/ThemeContext.tsx](src/context/ThemeContext.tsx)): `const { colors } = useTheme()`. Routed through context so the palette can one day branch (e.g., a light theme) without rewriting every screen.
+- **Static design tokens** — `typography`, `layout`, `elevation`, `animation`, `text` — come from a direct named import: `import { typography, layout } from '@/src/theme'`. These are frozen design constants; there's no value in threading them through context.
+
+If you reach for `useTheme().theme.layout.x`, switch to the named import. If you reach for `theme.colors.x` via direct import inside a React component, switch to `useTheme()`. The one accepted exception is pure non-React utilities — e.g. [src/lib/coachTint.ts](src/lib/coachTint.ts) reads colors via `import { theme }` because it must stay synchronously callable from anywhere. The dashboard's three-accent semantics (teal=action, coral=energy, amber=PR/ratio, plus positive/rest/red) are encoded meaning — see the comment header in [src/theme/index.ts](src/theme/index.ts).
 
 - Fonts: **Syne Bold** (headings), **DM Sans** (body) — loaded in `app/_layout.tsx`
 - Palette: Obsidian dark only (`#070708` bg), with semantic accents: teal (primary), coral (streaks), amber (PRs), red (destructive)

@@ -16,6 +16,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Button from '../../src/components/Button';
+import CoachVoiceHero from '../../src/components/CoachVoiceHero';
+import Surface from '../../src/components/Surface';
 import WeekStrip from '../../src/components/WeekStrip';
 import { get30DayPlan, type ForwardDay } from '../../src/utils/monthCalendar';
 import { useTheme } from '../../src/context/ThemeContext';
@@ -24,10 +26,12 @@ import { layout, typography } from '../../src/theme';
 import { detectReturnGap } from '../../src/utils/gapDetection';
 import {
   countUnfinishedPastTrainingDays,
+  deriveTodayKind,
   findEarliestUnfinishedTrainingDay,
   gapResolvedThroughKey,
   resolvePlanDayForDate,
   shouldShowGapModalToday,
+  type TodayKind,
 } from '../../src/utils/planShift';
 import { buildCatchUpRows } from '../../src/utils/planCatchUp';
 import { computeCompletedTrainingDays } from '../../src/utils/weekProgress';
@@ -49,11 +53,17 @@ import { useTabScroll } from '../../src/context/TabScrollContext';
 const COACH_SUB_TAB_INDEX = 3;
 import { runCoachVoiceUpgrade } from '../../src/lib/coachVoiceAI';
 import {
+  chooseHeroFactSig,
+  readPinnedHeroFactSig,
+  writePinnedHeroFactSig,
+} from '../../src/lib/coachHeroPin';
+import {
   computeGapDays,
   deriveObservations,
   isCompositeObservation,
   selectTopObservations,
   type LiftSessionTop,
+  type CoachObservation,
   type Observation,
 } from '../../src/lib/coachObservations';
 import { phraseObservation, dedupKeyFor, factSigFromDedupKey } from '../../src/lib/coachVoice';
@@ -102,11 +112,29 @@ type Profile = {
   goal?: string;
 };
 
+// Goal label map. Mirrors the GOAL_OPTIONS in app/(tabs)/profile.tsx and
+// app/onboarding.tsx — the three canonical values the profiles_goal_check
+// CHECK constraint allows. Direct lookup keeps the rendered label
+// consistent with both edit surfaces; the prior `goal.split('_').map(...)`
+// title-case trick produced "Muscle" for 'muscle' but lost the human-
+// readable "Build Muscle" the user picks during onboarding.
+const GOAL_LABEL = {
+  strength: 'Strength',
+  muscle: 'Build Muscle',
+  general: 'General Fitness',
+} as const;
+
 type WeeklyPlan = {
   id: string;
   days_planned: number;
   days_completed: number;
   today_type: 'workout' | 'rest' | 'none';
+  /** Single source of truth for the dashboard's three rest-day decisions
+   *  (TODAY card, coach hero, observation pipeline). Derived from the
+   *  SAME resolved plan as today_type; the two can never disagree. See
+   *  src/utils/planShift.deriveTodayKind. 'unknown' suppresses the hero
+   *  — a transient null during fetch never reads as rest. */
+  today_kind: TodayKind;
   today_workout_name?: string;
   today_duration?: number;
   /** Next upcoming planned workout (today-or-future, not completed). */
@@ -170,13 +198,13 @@ const PulseDot = ({ color }: { color: string }) => {
           position: 'absolute',
           width: 16,
           height: 16,
-          borderRadius: 8,
+          borderRadius: layout.radii.r8,
           backgroundColor: color,
           opacity: glowOpacity,
           transform: [{ scale }],
         }}
       />
-      <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: color }} />
+      <View style={{ width: 10, height: 10, borderRadius: layout.radii.r5, backgroundColor: color }} />
     </View>
   );
 };
@@ -212,15 +240,42 @@ export default function HomeScreen() {
   // nothing renders (never a misleading "0").
   const [earlyWin, setEarlyWin] = useState<EarlyWin>({ liftsImproved: 0, show: false });
   const [lastSevenDays, setLastSevenDays] = useState<any[]>([]);
-  const [isRollingMode, setIsRollingMode] = useState<boolean>(true);
   const [isTodayDone, setIsTodayDone] = useState<boolean>(false);
   const [latestWeight, setLatestWeight] = useState<number | null>(null);
-  const [historyRows, setHistoryRows] = useState<any[]>([]);
-  const [weeklyInsight, setWeeklyInsight] = useState<string | null>(null);
   // Persistent coach-message card. Loaded on focus from coachMessages store
   // (AsyncStorage). The latest entry is what finishWorkout appended on the
   // previous workout. Empty array → the card renders nothing.
   const [coachMessages, setCoachMessages] = useState<CoachMessage[]>([]);
+  // Per-day pin for the hero. Stable across refreshes so the dashboard
+  // signature doesn't reshuffle while the user is reading it. See
+  // src/lib/coachHeroPin.ts — null until the focus loader picks one.
+  const [pinnedHeroFactSig, setPinnedHeroFactSig] = useState<string | null>(null);
+  // Entrance treatment for a fresh, unseen coach observation. The card was
+  // previously a static line; with this animation a new observation gets a
+  // brief fade + lift on first appearance, so the user FEELS the engine
+  // reacted rather than reading a passive tile. Re-using a value means a
+  // re-focus without a new unseen observation does NOT re-play the entrance.
+  const coachEntranceProgress = useRef(new Animated.Value(1)).current;
+  const lastAnimatedUnseenIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    // latestUnseen scans newest-first; the dedupKey on the message is
+    // independent of the id, so id is the right entrance key (a re-loaded
+    // identical message keeps the same id and won't re-animate).
+    const unseen = latestUnseen(coachMessages);
+    if (!unseen) {
+      // No unseen → reset so a future unseen still earns the entrance.
+      lastAnimatedUnseenIdRef.current = null;
+      return;
+    }
+    if (lastAnimatedUnseenIdRef.current === unseen.id) return;
+    lastAnimatedUnseenIdRef.current = unseen.id;
+    coachEntranceProgress.setValue(0);
+    Animated.timing(coachEntranceProgress, {
+      toValue: 1,
+      duration: 450,
+      useNativeDriver: true,
+    }).start();
+  }, [coachMessages, coachEntranceProgress]);
   const { goToSubTab } = useTabScroll();
   const [returnGap, setReturnGap] = useState(0);
   const [showGapModal, setShowGapModal] = useState(false);
@@ -289,7 +344,13 @@ export default function HomeScreen() {
       // Ensure a plan exists for the current week. If onboarding is done
       // but the week rolled over (or the user opened on a fresh device),
       // this generates from profile defaults transparently.
-      await ensureCurrentWeekPlan();
+      //
+      // NON-BLOCKING: this does 2-4 network round-trips internally (profile
+      // read, plan read, maybe generate+upsert). The dashboard reads the
+      // plan from Supabase in the batched Promise.all below, so we don't
+      // need to wait for this. It runs in the background and updates the
+      // AsyncStorage cache; the next focus picks up any changes.
+      void ensureCurrentWeekPlan();
 
       // Replay any finish-workout saves that failed last session. Non-blocking
       // — flushPendingSaves swallows its own errors and reports persistent
@@ -297,28 +358,20 @@ export default function HomeScreen() {
       // the "saved locally" note on the complete screen.
       flushPendingSaves().catch(() => { /* tolerated; module reports to Sentry */ });
 
-      // Load coach messages for the dashboard card. Reads only — never
-      // makes a new network call (the AI fetch happens in finishWorkout).
+      // Load coach messages for the dashboard card. Non-blocking — it's an
+      // AsyncStorage read, fast, but doesn't need to gate the network batch.
       // The "new" dot is cleared only by opening the Coach sub-tab now,
       // so we don't call markCoachMessagesSeen from the dashboard.
-      try {
-        const msgs = await loadCoachMessages(user.id);
-        setCoachMessages(msgs);
-      } catch (e) {
-        reportSilent(e, 'home:loadCoachMessages');
-      }
-
-      const { data: profileData, error: profileError } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single();
+      loadCoachMessages(user.id)
+        .then(msgs => setCoachMessages(msgs))
+        .catch(e => reportSilent(e, 'home:loadCoachMessages'));
 
       // 45-day window powers the coach-observation pipeline below. Single
       // round-trip via the Promise.all so we're not paying for an extra
       // sequential roundtrip — both queries are bounded, recovery-excluded,
       // and small (a heavy lifter logs ~300 sets/45d).
       const todayDate = new Date();
+      const todayStr = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`;
       const days45Ago = new Date(todayDate);
       days45Ago.setDate(days45Ago.getDate() - 45);
       const obsFromIso = `${days45Ago.getFullYear()}-${String(days45Ago.getMonth() + 1).padStart(2, '0')}-${String(days45Ago.getDate()).padStart(2, '0')}`;
@@ -333,7 +386,10 @@ export default function HomeScreen() {
         obsLogsRes,
         obsSessionsRes,
         monthlyResult,
-        lifetimeCompletedRes
+        lifetimeCompletedRes,
+        profileRes,
+        todaySessionRes,
+        plansData,
       ] = await Promise.all([
         supabase.from('workout_sessions').select('*').eq('user_id', user.id).order('completed_at', { ascending: false }).limit(5),
         calculateStreak(user.id),
@@ -364,8 +420,31 @@ export default function HomeScreen() {
           .eq('user_id', user.id)
           .eq('completed', true)
           .eq('is_recovery', false),
+        // Profile — previously a sequential await before the batch.
+        supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', user.id)
+          .single(),
+        // Today-done check — previously a sequential await AFTER the batch.
+        supabase
+          .from('workout_sessions')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('planned_date', todayStr)
+          .eq('completed', true)
+          .limit(1),
+        // Plan read — previously a sequential await AFTER the batch.
+        supabase
+          .from('weekly_plans')
+          .select('*')
+          .eq('user_id', user.id)
+          .lte('week_start', todayStr)
+          .order('week_start', { ascending: false })
+          .limit(1),
       ]);
 
+      const profileData = profileRes.data;
       if (profileData) {
         setProfile(profileData as Profile);
       }
@@ -385,76 +464,11 @@ export default function HomeScreen() {
       setMonthlyConsistency(monthlyResult);
       setLastSevenDays(sevenDaysResult);
 
-      // History timeline — built from workout_sessions only (the dead
-      // daily_checkins table was removed). Energy is mapped from the lossy
-      // text energy_level on the session row: low→2, normal→3, high→4.
-      // Missing energy → 3. Rest-day energy is not captured anywhere today.
-      try {
-        const { data: sessions } = await supabase
-          .from('workout_sessions')
-          .select('workout_type, planned_date, completed, exercises_done, energy_level')
-          .eq('user_id', user.id)
-          .eq('completed', true)
-          .order('planned_date', { ascending: false })
-          .limit(14);
-
-        const energyFromLevel = (lvl: string | null | undefined): number =>
-          lvl === 'low' ? 2 : lvl === 'high' ? 4 : 3;
-
-        const rows = (sessions || []).map((s: any) => ({
-          date: s.planned_date,
-          energy_score: energyFromLevel(s.energy_level),
-          reflection_snippet: null,
-          muscle_group: s.workout_type || '—',
-          exercise_count: s.exercises_done?.length || 0,
-          has_pr: false,
-        }));
-        setHistoryRows(rows);
-
-        // Weekly insight from session energy.
-        if (rows.length >= 3) {
-          const lowDays = rows.filter(r => r.energy_score <= 2);
-          const completedSessions = rows.length;
-          const window = Math.min(rows.length, 7);
-          const completionRate = Math.round((completedSessions / window) * 100);
-          if (lowDays.length >= 2) {
-            setWeeklyInsight(`On your low days you still completed ${completionRate}% of your session. That's the number that matters.`);
-          } else {
-            setWeeklyInsight(`You've been consistent. ${completedSessions} sessions in the last ${window} days. Keep the rhythm.`);
-          }
-        }
-      } catch (e) {
-        // History fetch fails silently
-        reportSilent(e, 'home:fetchHistory');
-      }
-
-      const now = new Date();
-      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-
-      const { data: todaySession } = await supabase
-        .from('workout_sessions')
-        .select('id')
-        .eq('user_id', user.id)
-        .eq('planned_date', todayStr)
-        .eq('completed', true)
-        .limit(1);
-
-      const todayDoneLocal = !!(todaySession && todaySession.length > 0);
+      const todayDoneLocal = !!(todaySessionRes.data && todaySessionRes.data.length > 0);
       setIsTodayDone(todayDoneLocal);
 
-      // We now keep up to HORIZON_WEEKS future rows (today, +7, +14, +21).
-      // Filter to rows whose week_start has already started — otherwise an
-      // .order().limit(1) here would return the row 3 weeks out and the
-      // dashboard would render the future instead of today.
-      const { data: plansData } = await supabase
-        .from('weekly_plans')
-        .select('*')
-        .eq('user_id', user.id)
-        .lte('week_start', todayStr)
-        .order('week_start', { ascending: false })
-        .limit(1);
-
-      const currentPlan = plansData && plansData.length > 0 ? plansData[0] : null;
+      const plansDataArr = plansData.data;
+      const currentPlan = plansDataArr && plansDataArr.length > 0 ? plansDataArr[0] : null;
 
       if (currentPlan) {
         let planDaysArray: any[] = [];
@@ -529,6 +543,19 @@ export default function HomeScreen() {
             todayStr,
           );
 
+          // SINGLE SOURCE OF TRUTH for today's kind. Drives the TODAY card,
+          // the coach hero, the observation rest-day override, and the pin
+          // coherence guard — all three rest-day decisions read the same
+          // value so the card and the hero can never disagree on screen.
+          // 'unknown' when planDays didn't load (an empty plan blob, a
+          // race); never asserted as 'rest'. See deriveTodayKind +
+          // src/lib/coachHeroPin.ts.
+          const todayKind: TodayKind = deriveTodayKind(
+            planDaysArray,
+            currentPlan.week_start,
+            todayStr,
+          );
+
           // Next upcoming planned workout (today-or-future, not completed).
           // Reads each PlanDay's .date if present (post date-anchor fix),
           // otherwise falls back to currentPlan.week_start + weekday offset
@@ -590,7 +617,15 @@ export default function HomeScreen() {
             id: currentPlan.id,
             days_planned: targetDaysY,
             days_completed: targetDaysX,
-            today_type: todayPlan ? 'workout' : 'rest',
+            // today_type is now a projection of todayKind. 'training' →
+            // 'workout' (the active CTA path), 'rest' → 'rest', 'unknown'
+            // → 'none' (TODAY card falls through to the "Building" branch
+            // which is the right visual for an unresolved plan).
+            today_type:
+              todayKind === 'training' ? 'workout' :
+              todayKind === 'rest' ? 'rest' :
+              'none',
+            today_kind: todayKind,
             today_workout_name: todayPlan ? todayPlan.workoutType : undefined,
             today_duration: todayPlan ? 45 : undefined,
             next_workout_date: next?.date,
@@ -769,6 +804,12 @@ export default function HomeScreen() {
               // selector also outranks both (0.55 / 0.6).
               split: profileData?.preferred_split ?? null,
               trainingDays: profileData?.training_days ?? null,
+              // Onboarding personalisation. Both are optional on the profile
+              // row; the rationale phraser falls back to the generic split
+              // line when either is absent. Cast through `any` because the
+              // Supabase client isn't typed against the migrated schema yet.
+              goal: ((profileData as any)?.goal ?? null) as 'strength' | 'muscle' | 'general' | null,
+              priority: ((profileData as any)?.priority ?? null) as string | null,
               firstSessionDaysAgo,
               totalCompleted: completedDates.length,
               // Fatigue co-occurrence signals → pushing_hard / grinding.
@@ -785,7 +826,30 @@ export default function HomeScreen() {
               const fs = factSigFromDedupKey(m.dedupKey);
               if (fs) recentFactSigs.add(fs);
             }
-            const picked = selectTopObservations(observations, { recentFactSigs, max: 2 });
+            // Rest-day & unknown handling (reads the canonical todayKind).
+            //
+            //   'rest'    — force the rest_day observation as the sole
+            //               picked (and persisted) line. Workout-prep
+            //               reads (dialed_in / effort_zone / stall) are
+            //               filtered out by being absent from `picked`.
+            //   'unknown' — plan didn't load. NEVER derive / persist a
+            //               rest_day line we can't confirm. Strip any
+            //               rest_day candidate the BRAIN produced and let
+            //               the selector run on what's left (consistency,
+            //               training_status-adjacent reads — they're
+            //               plan-independent and still useful).
+            //   'training' — normal selector path, with rest_day excluded
+            //               as a defensive belt (the BRAIN shouldn't emit
+            //               it on a real workout day, but if it does we
+            //               must not let it surface).
+            const restDayObs = observations.find(o => o.type === 'rest_day');
+            const nonRestObservations = observations.filter(o => o.type !== 'rest_day');
+            const picked: CoachObservation[] =
+              todayKind === 'rest'
+                ? (restDayObs ? [restDayObs] : [])
+                : todayKind === 'unknown'
+                  ? selectTopObservations(nonRestObservations, { recentFactSigs, max: 2 })
+                  : selectTopObservations(nonRestObservations, { recentFactSigs, max: 2 });
             for (const obs of picked) {
               await appendCoachMessageOnce(
                 user.id,
@@ -806,13 +870,48 @@ export default function HomeScreen() {
             // rephraser (which only handles single facts). Filtering them keeps
             // coachVoiceAI on the narrower Observation type and untouched.
             const aiPicked = picked.filter((o): o is Observation => !isCompositeObservation(o));
-            void runCoachVoiceUpgrade(uid, aiPicked, updateCoachMessageTextByFactSig);
+            void runCoachVoiceUpgrade(uid, aiPicked, updateCoachMessageTextByFactSig, profile?.username);
 
             // Re-load so anything just appended surfaces on this focus.
             // Note: seen-clearing is now the Coach sub-tab's job, not the
             // dashboard's — we just push the latest list into state.
             const refreshed = await loadCoachMessages(user.id);
             setCoachMessages(refreshed);
+
+            // ── Pin today's hero observation ──────────────────────────
+            // Without this the dashboard hero would change on every focus
+            // (the selector re-ranks, the AI rephrase swaps in mid-day,
+            // observations advance). The pin is per (user, today) and
+            // collapses to null on date roll-over via the stored shape;
+            // the renderer reads it to find the matching coach-message.
+            try {
+              const pickedFactSigs = picked.map(o => o.factSig);
+              const availableFactSigs = new Set(
+                refreshed
+                  .map(m => factSigFromDedupKey(m.dedupKey))
+                  .filter((s): s is string => !!s),
+              );
+              const existingPin = await readPinnedHeroFactSig(user.id, todayStr);
+              // Pass todayKind — the helper discards a rest pin on a
+              // training day (and vice versa) so a transient unknown
+              // pass's stale rest_day pin can't resurface as today's
+              // hero. 'unknown' returns null, suppressing the hero.
+              const chosen = chooseHeroFactSig(
+                pickedFactSigs,
+                availableFactSigs,
+                existingPin,
+                todayKind,
+              );
+              setPinnedHeroFactSig(chosen);
+              if (chosen && chosen !== existingPin) {
+                // Fire-and-forget — a write failure here just means the
+                // next focus re-pins; never blocks the render. The
+                // overwrite also evicts an incoherent prior pin.
+                void writePinnedHeroFactSig(user.id, todayStr, chosen);
+              }
+            } catch (e) {
+              reportSilent(e, 'home:pinHeroFactSig');
+            }
           } catch (e) {
             reportSilent(e, 'home:coachObservations');
           }
@@ -1192,7 +1291,7 @@ export default function HomeScreen() {
             .lte('planned_date', todayStr),
           supabase
             .from('profiles')
-            .select('training_days, preferred_split, fitness_level')
+            .select('training_days, preferred_split, fitness_level, training_weekdays')
             .eq('id', user.id)
             .maybeSingle(),
           supabase
@@ -1245,10 +1344,17 @@ export default function HomeScreen() {
       );
 
       if (missedCount > 0) {
-        const profile = profileRes.data as { training_days: number | null; preferred_split: string | null; fitness_level: string | null } | null;
+        const profile = profileRes.data as { training_days: number | null; preferred_split: string | null; fitness_level: string | null; training_weekdays: number[] | null } | null;
         const trainingDays = (profile?.training_days && profile.training_days > 0)
           ? profile.training_days
           : 3;
+        // Future segment of the catch-up pack should land on the user's
+        // chosen weekdays, not the default pickDefaultDayOffsets spread.
+        // buildCatchUpRows handles the null fallback so legacy / 1-2-7-day
+        // users behave exactly as before.
+        const trainingWeekdays = Array.isArray(profile?.training_weekdays)
+          ? profile.training_weekdays
+          : null;
         const fitnessLevel = (profile?.fitness_level as 'beginner' | 'intermediate' | 'advanced') ?? 'beginner';
         const storedLoc = await AsyncStorage.getItem('user:defaultLocation');
         const location: 'gym' | 'home' = storedLoc === 'Home' ? 'home' : 'gym';
@@ -1300,6 +1406,9 @@ export default function HomeScreen() {
           // Keep the user's explicit split on resume/skip (resolveSplit in the
           // generator guards an invalid/legacy value).
           split: (profile?.preferred_split ?? undefined) as SplitId | undefined,
+          // Future segment of the resume pack lands on the user's chosen
+          // weekdays. Catch-up segment stacks back-to-back by design.
+          trainingWeekdays,
           planHistory,
           blockIndex,
           blockWeek,
@@ -1505,11 +1614,18 @@ export default function HomeScreen() {
   const daysLabels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
   // ── Card presentation (derived from state; pure render helpers) ───────
-  // Rest day = no training planned today. On a rest day the streak is being
-  // MAINTAINED, not about to break, so the Consistency number drops the fiery
-  // coral for a calm neutral — no "Duolingo about to break" alarm.
-  const isRestToday = !plan || plan.today_type !== 'workout';
-  const streakColor = isRestToday ? colors.textSecondary : colors.accentCoral;
+  // ALL three rest-day decisions (TODAY card, coach hero, observation
+  // override) now read this single value, which is derived from the SAME
+  // resolved plan via deriveTodayKind. 'unknown' means the plan isn't
+  // loaded yet and is intentionally distinct from 'rest' — the hero
+  // suppresses on 'unknown' rather than asserting "Rest today" from a
+  // transient null. The Consistency streak color also follows the kind:
+  // on a confirmed rest day the streak is MAINTAINED (calm neutral, no
+  // "Duolingo about to break" alarm); on unknown we keep the neutral too
+  // since we can't promise the active-day fiery coral honestly.
+  const todayKind: TodayKind = plan?.today_kind ?? 'unknown';
+  const isRestToday = todayKind === 'rest';
+  const streakColor = todayKind === 'training' ? colors.accentCoral : colors.textSecondary;
 
   // Momentum → "This month": workouts completed vs the month's planned target
   // as a percentage headline, raw count as context. Empty state (no completed
@@ -1725,31 +1841,124 @@ export default function HomeScreen() {
             </View>
           </View>
 
+          {/* CoachVoiceHero — v2 dashboard signature.
+              Pre-workout ONLY (when isTodayDone === false). Renders the same
+              top observation the coach teaser would otherwise show, but in
+              the large editorial hero treatment: kicker + big tinted line on
+              a tactile Surface, no avatar. Tint comes from trainingStatus
+              via coachTintFor (see src/lib/coachTint.ts).
+              The line text is the deterministic phraseObservation already
+              persisted in coachMessages by the existing pipeline; the AI
+              rephrase swap-in happens upstream via runCoachVoiceUpgrade.
+              The post-workout coach teaser below stays for isTodayDone. */}
+          {!isTodayDone && coachMessages.length > 0 && (() => {
+            // UNKNOWN gate: plan not loaded yet (the v1 bug surfaced
+            // "Rest today" on a real training day because !plan was
+            // misread as rest). Never assert anything from an unloaded
+            // plan — suppress until the focus pass resolves the kind.
+            if (todayKind === 'unknown') return null;
+
+            // REST-DAY CONTEXT: a rest day's hero must NOT carry a
+            // workout-prep line (a "dialed in" stat, a stall directive,
+            // a streak nudge). The focus loader above already forces
+            // picked=[rest_day_obs] on rest days, so a fresh rest_day
+            // message lands in the store; here we pull THAT specific
+            // message for the hero. If no rest_day message exists, the
+            // hero suppresses entirely rather than show a stale
+            // workout-shaped line from a prior focus.
+            if (isRestToday) {
+              const restMsg = coachMessages.find(m =>
+                m.dedupKey?.startsWith('obs:rest_day:'),
+              );
+              if (!restMsg) return null;
+              const unseen = latestUnseen(coachMessages);
+              return (
+                <CoachVoiceHero
+                  line={restMsg.text}
+                  trainingState={trainingStatus?.state ?? null}
+                  unseen={!!unseen && unseen.id === restMsg.id}
+                />
+              );
+            }
+
+            // Training day: resolve the pinned hero message (stable
+            // across focuses; see src/lib/coachHeroPin.ts). Defensive
+            // filter — even if a stale rest_day message is the most
+            // recent in the store (a v1 transient-unknown leftover), it
+            // must NEVER fall through as today's hero. The pin coherence
+            // guard already drops a rest pin on training day; the same
+            // filter here covers the unpinned fallback path.
+            const trainingCandidates = coachMessages.filter(
+              m => !m.dedupKey?.startsWith('obs:rest_day:'),
+            );
+            if (trainingCandidates.length === 0) return null;
+            const pinnedMsg = pinnedHeroFactSig
+              ? trainingCandidates.find(
+                  m => factSigFromDedupKey(m.dedupKey) === pinnedHeroFactSig,
+                )
+              : null;
+            const heroMsg = pinnedMsg ?? trainingCandidates[0];
+            const unseen = latestUnseen(coachMessages);
+            return (
+              <CoachVoiceHero
+                line={heroMsg.text}
+                trainingState={trainingStatus?.state ?? null}
+                unseen={!!unseen && unseen.id === heroMsg.id}
+              />
+            );
+          })()}
+
           {/* Coach card — slim teaser for the most recent coach message.
               Tap routes to the Coach sub-tab where the full history lives.
-              Renders nothing when the store is empty. */}
-          {coachMessages.length > 0 && (
-            <TouchableOpacity
-              activeOpacity={0.85}
-              onPress={() => goToSubTab(COACH_SUB_TAB_INDEX)}
-              style={styles.coachCard}
-              accessibilityRole="button"
-              accessibilityLabel={`Coach: ${coachMessages[0].text} — tap to open coach history`}
-            >
-              <View style={styles.coachCardHeader}>
-                <Text style={styles.coachCardKicker}>COACH</Text>
-                {latestUnseen(coachMessages) && (
-                  <View style={styles.coachCardDot} accessibilityLabel="new" />
-                )}
-              </View>
-              {/* 4 lines: campaign-status messages are up to four short
-                  lines and the deload countdown is the last one. */}
-              <Text style={styles.coachCardLatest} numberOfLines={4}>
-                {coachMessages[0].text}
-              </Text>
-              <Text style={styles.coachCardFooter}>View all →</Text>
-            </TouchableOpacity>
-          )}
+              Renders nothing when the store is empty.
+              On a fresh unseen observation the card enters with a fade +
+              lift (coachEntranceProgress) and the kicker switches to
+              "COACH JUST NOTICED" — the deliberate "the engine reacted"
+              moment. Seen messages render statically.
+              Gated on isTodayDone so we don't duplicate the CoachVoiceHero
+              above — pre-workout the hero is the one coach surface; post-
+              workout the slim teaser takes over. */}
+          {isTodayDone && coachMessages.length > 0 && (() => {
+            const unseen = latestUnseen(coachMessages);
+            return (
+              <Animated.View
+                style={{
+                  opacity: coachEntranceProgress,
+                  transform: [
+                    {
+                      translateY: coachEntranceProgress.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [8, 0],
+                      }),
+                    },
+                  ],
+                }}
+              >
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={() => goToSubTab(COACH_SUB_TAB_INDEX)}
+                  style={styles.coachCard}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Coach: ${coachMessages[0].text} — tap to open coach history`}
+                >
+                  <View style={styles.coachCardHeader}>
+                    <Text style={styles.coachCardKicker}>
+                      {unseen ? 'COACH JUST NOTICED' : 'COACH'}
+                    </Text>
+                    {unseen && (
+                      <View style={styles.coachCardDot} accessibilityLabel="new" />
+                    )}
+                  </View>
+                  {/* 4 lines: campaign-status messages are up to four short
+                      lines and the deload countdown is the last one. */}
+                  <Text style={styles.coachCardLatest} numberOfLines={4}>
+                    {coachMessages[0].text}
+                  </Text>
+                  <Text style={styles.coachCardFooter}>View all →</Text>
+                </TouchableOpacity>
+              </Animated.View>
+            );
+          })()}
 
 
           {/* TODAY — feature card, leads the screen */}
@@ -1938,7 +2147,7 @@ export default function HomeScreen() {
               fetched in fetchDashboardData) with the raw count as context.
               Honest "—"/"Building" empties — never a misleading "0%". */}
           {!loading && (
-            <View style={styles.momentumCard}>
+            <Surface style={styles.momentumCard}>
               <View style={styles.momentumHalf}>
                 <Text style={styles.momentumKicker}>CONSISTENCY</Text>
                 <Text
@@ -1973,7 +2182,7 @@ export default function HomeScreen() {
                   {monthView.sub}
                 </Text>
               </View>
-            </View>
+            </Surface>
           )}
 
           {/* WEEK PROGRESS — tap to expand the full plan */}
@@ -2029,7 +2238,7 @@ export default function HomeScreen() {
                               </Text>
                             </View>
                             {isDone ? (
-                              <Text style={{ color: colors.accentTeal, fontSize: 14, marginLeft: 4 }}>✓</Text>
+                              <Text style={{ color: colors.accentTeal, fontSize: typography.size.s14, marginLeft: 4 }}>✓</Text>
                             ) : null}
                           </View>
                         </View>
@@ -2072,12 +2281,12 @@ export default function HomeScreen() {
           )}
 
           {!loading && profile && (
-            <View style={styles.profileSummaryCard}>
+            <Surface style={styles.profileSummaryCard}>
               <View style={styles.profileSummaryRow}>
                 <View style={styles.profileSummaryItem}>
                   <Text style={styles.profileSummaryLabel}>Goal</Text>
                   <Text style={styles.profileSummaryValue}>
-                    {profile.goal?.split('_').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') ?? '—'}
+                    {GOAL_LABEL[profile.goal as keyof typeof GOAL_LABEL] ?? '—'}
                   </Text>
                 </View>
                 <View style={styles.profileSummaryItem}>
@@ -2099,7 +2308,7 @@ export default function HomeScreen() {
                   </View>
                 )}
               </View>
-            </View>
+            </Surface>
           )}
 
         </ScrollView>
@@ -2153,19 +2362,19 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   signalTitle: {
     fontFamily: typography.family.heading,
-    fontSize: 13.5,
+    fontSize: typography.size.s13_5,
     letterSpacing: -0.2,
     marginBottom: 2,
   },
   signalBody: {
     fontFamily: typography.family.body,
-    fontSize: 11.5,
+    fontSize: typography.size.s11_5,
     lineHeight: 16,
     color: colors.textSecondary,
   },
   signalCta: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 10,
+    fontSize: typography.size.s10,
     letterSpacing: 1,
   },
   avatar: {
@@ -2205,7 +2414,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   coachCardKicker: {
     fontFamily: typography.family.body,
-    fontSize: 11,
+    fontSize: typography.size.s11,
     color: colors.accentTeal,
     textTransform: 'uppercase',
     letterSpacing: 1.2,
@@ -2216,19 +2425,19 @@ const makeStyles = (colors: any) => StyleSheet.create({
   coachCardDot: {
     width: 6,
     height: 6,
-    borderRadius: 3,
+    borderRadius: layout.radii.r3,
     backgroundColor: colors.accentTeal,
   },
   coachCardLatest: {
     fontFamily: typography.family.body,
-    fontSize: 15,
+    fontSize: typography.size.s15,
     lineHeight: 21,
     color: colors.textPrimary,
     letterSpacing: 0.1,
   },
   coachCardFooter: {
     fontFamily: typography.family.body,
-    fontSize: 11,
+    fontSize: typography.size.s11,
     color: colors.textMuted,
     marginTop: 8,
     letterSpacing: 0.6,
@@ -2250,28 +2459,28 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   todayKicker: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 10,
+    fontSize: typography.size.s10,
     letterSpacing: 2,
     color: colors.accentTeal,
     marginBottom: 8,
   },
   todayHeadline: {
     fontFamily: typography.family.heading,
-    fontSize: 26,
+    fontSize: typography.size.s26,
     letterSpacing: -0.6,
     color: colors.textPrimary,
     lineHeight: 30,
   },
   todayMeta: {
     fontFamily: typography.family.body,
-    fontSize: 13,
+    fontSize: typography.size.s13,
     color: colors.textSecondary,
     marginTop: 4,
   },
   // ── Recovery gauge (premium, full-width, sage-tinted) ────────────────
   recoveryCard: {
     // Subtle low-opacity sage tint to set "healing" apart from "lifting".
-    backgroundColor: '#131615',
+    backgroundColor: colors.surface,
     borderRadius: layout.cardRadius,
     borderWidth: 1,
     borderColor: colors.cardBorder,
@@ -2289,20 +2498,20 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   recoveryScore: {
     fontFamily: typography.family.heading,
-    fontSize: 52,
+    fontSize: typography.size.s52,
     letterSpacing: -1.5,
     lineHeight: 56,
     marginTop: 10,
   },
   recoveryScoreBuilding: {
-    fontSize: 30,
+    fontSize: typography.size.s30,
     lineHeight: 34,
     letterSpacing: -0.6,
     color: colors.textSecondary,
   },
   recoveryBandLabel: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 12,
+    fontSize: typography.size.s12,
     letterSpacing: 1.6,
     marginTop: 4,
   },
@@ -2313,28 +2522,28 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   recoveryKicker: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 10,
+    fontSize: typography.size.s10,
     letterSpacing: 2,
     color: colors.textMuted,
     marginBottom: 6,
   },
   recoveryReason: {
     fontFamily: typography.family.body,
-    fontSize: 15,
+    fontSize: typography.size.s15,
     lineHeight: 22,
     color: colors.textPrimary,
   },
   // ── Calibration unlock progress (locked recovery card) ───────────────
   calibrationTrack: {
     height: 6,
-    borderRadius: 3,
+    borderRadius: layout.radii.r3,
     backgroundColor: colors.cardBorder,
     marginTop: layout.spacing.md,
     overflow: 'hidden',
   },
   calibrationFill: {
     height: '100%',
-    borderRadius: 3,
+    borderRadius: layout.radii.r3,
     backgroundColor: colors.accentTeal,
   },
   // ── Early small-win pill ─────────────────────────────────────────────
@@ -2355,26 +2564,22 @@ const makeStyles = (colors: any) => StyleSheet.create({
   earlyWinDot: {
     width: 8,
     height: 8,
-    borderRadius: 4,
+    borderRadius: layout.radii.r4,
     backgroundColor: colors.accentPositive,
     marginRight: layout.spacing.sm,
   },
   earlyWinText: {
     flex: 1,
     fontFamily: typography.family.bodyMedium,
-    fontSize: 13,
+    fontSize: typography.size.s13,
     lineHeight: 18,
     color: colors.textPrimary,
   },
   // ── Momentum (Consistency | Strength, merged, internal divider) ───────
+  // Surface provides bg + border + radius + shadow; we just set layout.
   momentumCard: {
     flexDirection: 'row',
-    backgroundColor: colors.surface,
-    borderRadius: layout.cardRadius,
-    borderWidth: 1,
-    borderColor: colors.cardBorder,
     padding: layout.spacing.md,
-    marginBottom: layout.spacing.md,
   },
   momentumHalf: {
     flex: 1,
@@ -2388,26 +2593,26 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   momentumKicker: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 10,
+    fontSize: typography.size.s10,
     letterSpacing: 1.6,
     color: colors.textMuted,
     marginBottom: layout.spacing.sm,
   },
   momentumValue: {
     fontFamily: typography.family.heading,
-    fontSize: 30,
+    fontSize: typography.size.s30,
     letterSpacing: -0.8,
     lineHeight: 34,
   },
   momentumLabel: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 12,
+    fontSize: typography.size.s12,
     color: colors.textSecondary,
     marginTop: 4,
   },
   momentumSub: {
     fontFamily: typography.family.body,
-    fontSize: 11,
+    fontSize: typography.size.s11,
     lineHeight: 15,
     color: colors.textMuted,
     marginTop: 2,
@@ -2422,7 +2627,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   todayInlineLink: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 13,
+    fontSize: typography.size.s13,
     letterSpacing: 0.4,
     // Muted on purpose — deliberately less prominent than the headline
     // above. The arrow glyph is the discovery cue; the color is not.
@@ -2445,7 +2650,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   recoveryGhostBtnText: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 13,
+    fontSize: typography.size.s13,
     letterSpacing: 0.6,
     color: colors.accentPositive,
   },
@@ -2466,19 +2671,19 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   weekRowLabel: {
     fontFamily: typography.family.heading,
-    fontSize: 13.5,
+    fontSize: typography.size.s13_5,
     letterSpacing: -0.2,
     color: colors.textPrimary,
   },
   weekRowMeta: {
     fontFamily: typography.family.body,
-    fontSize: 11.5,
+    fontSize: typography.size.s11_5,
     color: colors.textSecondary,
     marginTop: 2,
   },
   weekRowChevron: {
     fontFamily: typography.family.heading,
-    fontSize: 22,
+    fontSize: typography.size.s22,
     lineHeight: 22,
     color: colors.textMuted,
   },
@@ -2502,7 +2707,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   weekDayName: {
     fontFamily: typography.family.heading,
-    fontSize: 14,
+    fontSize: typography.size.s14,
     color: colors.textPrimary,
     letterSpacing: -0.2,
   },
@@ -2520,7 +2725,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   weekDayPillText: {
     fontFamily: typography.family.body,
-    fontSize: 9.5,
+    fontSize: typography.size.s9_5,
     letterSpacing: 1.2,
     color: colors.textSecondary,
     textTransform: 'uppercase',
@@ -2531,7 +2736,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   weekDayExerciseText: {
     fontFamily: typography.family.body,
-    fontSize: 11.5,
+    fontSize: typography.size.s11_5,
     color: colors.textMuted,
     fontVariant: ['tabular-nums'],
   },
@@ -2543,13 +2748,13 @@ const makeStyles = (colors: any) => StyleSheet.create({
   progressBarBg: {
     height: 6,
     backgroundColor: colors.sliderTrack,
-    borderRadius: 3,
+    borderRadius: layout.radii.r3,
     overflow: 'hidden',
   },
   progressBarFill: {
     height: 6,
     backgroundColor: colors.accentTeal,
-    borderRadius: 3,
+    borderRadius: layout.radii.r3,
   },
   todaySubtext: {
     fontFamily: typography.family.body,
@@ -2587,55 +2792,10 @@ const makeStyles = (colors: any) => StyleSheet.create({
     color: colors.textSecondary,
     marginTop: layout.spacing.xs,
   },
-  dotsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderRadius: layout.cardRadius,
-    borderWidth: 1,
-    borderColor: colors.cardBorder,
-    padding: layout.spacing.lg,
-    marginBottom: layout.spacing.md,
-  },
-  dotCol: {
-    alignItems: 'center',
-    gap: 6,
-  },
-  dotFilled: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.accentTeal,
-  },
-  dotMissed: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: 'transparent',
-  },
-  dotRest: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: colors.sliderTrack,
-  },
-  dotLabel: {
-    fontFamily: typography.family.body,
-    fontSize: typography.size.xs,
-    color: colors.textMuted,
-  },
-  profileSummaryCard: {
-    backgroundColor: colors.surface,
-    borderRadius: layout.cardRadius,
-    borderWidth: 1,
-    borderColor: colors.cardBorder,
-    padding: layout.spacing.lg,
-    marginBottom: layout.spacing.md,
-    alignItems: 'flex-start',
-  },
+  // Surface provides bg + border + radius + shadow; we just set layout.
+  // No alignItems here — flex-start on the panel shrinks the inner rows to
+  // their content width and squashes the card into a narrow column.
+  profileSummaryCard: {},
   profileSummaryRow: {
     flexDirection: 'row',
     gap: layout.spacing.lg,
@@ -2685,7 +2845,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   // ── Gap acknowledgment modal ────────────────────
   gapModalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    backgroundColor: colors.scrimStrong,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: layout.spacing.lg,
@@ -2700,7 +2860,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   gapModalEyebrow: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 10,
+    fontSize: typography.size.s10,
     letterSpacing: 2,
     color: colors.accentTeal,
     marginBottom: layout.spacing.sm,
@@ -2737,14 +2897,14 @@ const makeStyles = (colors: any) => StyleSheet.create({
     height: 32,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 16,
+    borderRadius: layout.radii.r16,
   },
   monthNavBtnDisabled: {
     opacity: 0.3,
   },
   monthNavGlyph: {
     fontFamily: typography.family.heading,
-    fontSize: 20,
+    fontSize: typography.size.s20,
     color: colors.textSecondary,
     lineHeight: 22,
   },
@@ -2758,7 +2918,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
     flex: 1,
     textAlign: 'center',
     fontFamily: typography.family.body,
-    fontSize: 10,
+    fontSize: typography.size.s10,
     letterSpacing: 0.8,
     color: colors.textMuted,
   },
@@ -2787,7 +2947,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   monthCellNumber: {
     fontFamily: typography.family.body,
-    fontSize: 11,
+    fontSize: typography.size.s11,
     color: colors.textSecondary,
   },
   monthCellNumberOut: {
@@ -2802,13 +2962,13 @@ const makeStyles = (colors: any) => StyleSheet.create({
   monthDotCompleted: {
     width: 12,
     height: 12,
-    borderRadius: 6,
+    borderRadius: layout.radii.r6,
     backgroundColor: colors.accentTeal,
   },
   monthDotRing: {
     width: 12,
     height: 12,
-    borderRadius: 6,
+    borderRadius: layout.radii.r6,
     borderWidth: 1,
     borderColor: colors.line ?? colors.border,
     backgroundColor: 'transparent',
@@ -2816,7 +2976,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
     justifyContent: 'center',
   },
   monthDotMissedGlyph: {
-    fontSize: 10,
+    fontSize: typography.size.s10,
     lineHeight: 10,
     color: colors.textMuted,
     marginTop: -2,
@@ -2824,7 +2984,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   monthDotRest: {
     width: 4,
     height: 4,
-    borderRadius: 2,
+    borderRadius: layout.radii.r2,
     backgroundColor: colors.textMuted,
   },
   monthDaySummary: {
@@ -2851,13 +3011,13 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   forwardWeekday: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 10,
+    fontSize: typography.size.s10,
     letterSpacing: 1.2,
     color: colors.textMuted,
   },
   forwardDateNum: {
     fontFamily: typography.family.heading,
-    fontSize: 14,
+    fontSize: typography.size.s14,
     color: colors.textPrimary,
     marginTop: 2,
   },
@@ -2872,7 +3032,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   forwardWorkoutLabel: {
     flex: 1,
     fontFamily: typography.family.body,
-    fontSize: 14,
+    fontSize: typography.size.s14,
     color: colors.textSecondary,
     marginLeft: 8,
   },

@@ -3,6 +3,7 @@
 import {
   countUnfinishedPastTrainingDays,
   daysBetweenIso,
+  deriveTodayKind,
   findEarliestUnfinishedTrainingDay,
   plannedTrainingDatesInWeek,
   resolvePlanDayForDate,
@@ -57,6 +58,82 @@ describe('resolvePlanDayForDate', () => {
       { day: 'Wednesday', workoutType: 'Pull' },
     ];
     expect(resolvePlanDayForDate(planDays, WEEK_START, WED)).toEqual(planDays[1]);
+  });
+});
+
+// ── deriveTodayKind ────────────────────────────────────────────────────
+// THE bug fix at the BRAIN: distinguish "plan not loaded yet" (unknown)
+// from "today is a rest day" (rest). The dashboard previously read
+// !plan ⇒ rest, and a transient null during fetch persisted a rest_day
+// observation that then pinned for the rest of the day. The tri-state
+// kind collapses that — three rest-day checks now derive from one read.
+
+describe('deriveTodayKind', () => {
+  it("returns 'unknown' when planDays is null (not loaded yet)", () => {
+    expect(deriveTodayKind(null, WEEK_START, WED)).toBe('unknown');
+    expect(deriveTodayKind(undefined, WEEK_START, WED)).toBe('unknown');
+  });
+
+  it("returns 'unknown' when planDays is empty (loaded but no rows)", () => {
+    expect(deriveTodayKind([], WEEK_START, WED)).toBe('unknown');
+  });
+
+  it("returns 'unknown' when weekStart is missing", () => {
+    const planDays = [{ day: 'Wednesday', date: WED, workoutType: 'Pull' }];
+    expect(deriveTodayKind(planDays, null, WED)).toBe('unknown');
+    expect(deriveTodayKind(planDays, undefined, WED)).toBe('unknown');
+    expect(deriveTodayKind(planDays, '', WED)).toBe('unknown');
+  });
+
+  it("returns 'training' when today resolves to a training row", () => {
+    const planDays = [
+      { day: 'Wednesday', date: WED, workoutType: 'Legs' },
+      { day: 'Friday',    date: FRI, workoutType: 'Push' },
+    ];
+    expect(deriveTodayKind(planDays, WEEK_START, WED)).toBe('training');
+    expect(deriveTodayKind(planDays, WEEK_START, FRI)).toBe('training');
+  });
+
+  it("returns 'rest' when planDays is loaded but no row covers today", () => {
+    // Plan trains M/W/F only; today is Tuesday — no row matches.
+    const planDays = [
+      { day: 'Monday',    date: WEEK_START,   workoutType: 'Push' },
+      { day: 'Wednesday', date: WED,          workoutType: 'Pull' },
+      { day: 'Friday',    date: FRI,          workoutType: 'Legs' },
+    ];
+    expect(deriveTodayKind(planDays, WEEK_START, '2026-06-02')).toBe('rest');
+  });
+
+  it("returns 'rest' when today's row is explicit Rest", () => {
+    const planDays = [
+      { day: 'Wednesday', date: WED, workoutType: 'Rest' },
+    ];
+    expect(deriveTodayKind(planDays, WEEK_START, WED)).toBe('rest');
+  });
+
+  it("returns 'rest' when today's row is a Recovery-prefixed type", () => {
+    const planDays = [
+      { day: 'Wednesday', date: WED, workoutType: 'Recovery — Mobility' },
+    ];
+    expect(deriveTodayKind(planDays, WEEK_START, WED)).toBe('rest');
+  });
+
+  it("returns 'rest' when today's row has an empty/whitespace workoutType", () => {
+    const planDays = [
+      { day: 'Wednesday', date: WED, workoutType: '' },
+    ];
+    expect(deriveTodayKind(planDays, WEEK_START, WED)).toBe('rest');
+    const planDays2 = [
+      { day: 'Wednesday', date: WED, workoutType: '   ' },
+    ];
+    expect(deriveTodayKind(planDays2, WEEK_START, WED)).toBe('rest');
+  });
+
+  it('null planDays → unknown — NEVER conflates load race with a real rest day (the bug)', () => {
+    // This is the exact shape that caused "Rest today" to flash on a LEGS
+    // day: the initial render saw plan=null and treated it as rest. The
+    // tri-state collapses that to 'unknown' so the hero suppresses.
+    expect(deriveTodayKind(null, WEEK_START, WED)).not.toBe('rest');
   });
 });
 

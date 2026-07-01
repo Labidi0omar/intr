@@ -37,6 +37,7 @@ import {
   type SplitId,
 } from './planGeneration';
 import { deriveCanonicalWeek, weekRowMatchesCanonical } from '../utils/planCatchUp';
+import { normalizeTrainingWeekdays, weekdaysToOffsets } from '../utils/trainingWeekdays';
 import { gapResolvedThroughKey } from '../utils/planShift';
 
 /** How far ahead we try to keep the user covered. 4 weeks ≈ a month — enough
@@ -91,13 +92,17 @@ function extractDays(plan: any): any[] | null {
  *  plan:current and user:defaultLocation. */
 const PROFILE_INPUTS_KEY = 'user:profileInputs';
 
-/** The three profile fields plan generation actually needs. Stored as a small
+/** The profile fields plan generation actually needs. Stored as a small
  *  JSON blob under PROFILE_INPUTS_KEY. Kept loosely typed (string) so callers
- *  can write without importing the SplitId/FitnessLevel unions; reads cast. */
+ *  can write without importing the SplitId/FitnessLevel unions; reads cast.
+ *  `training_weekdays` is the user's calendar-weekday selection (0=Sun..6=Sat)
+ *  from the onboarding/Profile picker — null means "no explicit pick", and
+ *  the generator falls back to pickDefaultDayOffsets(training_days). */
 export interface CachedProfileInputs {
   training_days: number | null;
   preferred_split: string | null;
   fitness_level: string | null;
+  training_weekdays: number[] | null;
 }
 
 /** Read the cached profile inputs. Error-tolerant: any read/parse failure
@@ -108,10 +113,15 @@ export async function readCachedProfileInputs(): Promise<CachedProfileInputs | n
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<CachedProfileInputs> | null;
     if (!parsed || typeof parsed !== 'object') return null;
+    const wkRaw = (parsed as { training_weekdays?: unknown }).training_weekdays;
+    const training_weekdays = Array.isArray(wkRaw)
+      ? (wkRaw.filter(n => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= 6) as number[])
+      : null;
     return {
       training_days: typeof parsed.training_days === 'number' ? parsed.training_days : null,
       preferred_split: typeof parsed.preferred_split === 'string' ? parsed.preferred_split : null,
       fitness_level: typeof parsed.fitness_level === 'string' ? parsed.fitness_level : null,
+      training_weekdays: training_weekdays && training_weekdays.length > 0 ? training_weekdays : null,
     };
   } catch {
     return null;
@@ -128,6 +138,7 @@ export async function writeCachedProfileInputs(inputs: Partial<CachedProfileInpu
       training_days: inputs.training_days !== undefined ? inputs.training_days : (existing?.training_days ?? null),
       preferred_split: inputs.preferred_split !== undefined ? inputs.preferred_split : (existing?.preferred_split ?? null),
       fitness_level: inputs.fitness_level !== undefined ? inputs.fitness_level : (existing?.fitness_level ?? null),
+      training_weekdays: inputs.training_weekdays !== undefined ? inputs.training_weekdays : (existing?.training_weekdays ?? null),
     };
     await AsyncStorage.setItem(PROFILE_INPUTS_KEY, JSON.stringify(merged));
   } catch {
@@ -160,7 +171,7 @@ export async function ensureCurrentWeekPlan({ force = false }: EnsureArgs = {}):
 
     const { data: profile } = await supabase
       .from('profiles')
-      .select('training_days, preferred_split, fitness_level')
+      .select('training_days, preferred_split, fitness_level, training_weekdays')
       .eq('id', user.id)
       .maybeSingle();
 
@@ -231,6 +242,28 @@ export async function ensureCurrentWeekPlan({ force = false }: EnsureArgs = {}):
     // correct — the explicit-split-never-overwritten semantics are unchanged.
     const split: SplitId = rawPreferredSplit ?? splitForDays(trainingDays);
 
+    // training_weekdays — user's calendar-weekday picks (0=Sun..6=Sat).
+    // Source of truth for WHICH calendar days the plan schedules sessions
+    // on. Null when the user is on a legacy profile or an out-of-scope day
+    // count (1, 2, 7) — the generator falls back to pickDefaultDayOffsets
+    // in that case so nothing breaks. Resolution mirrors the other fields:
+    // prefer the network value, fall back to the offline cache.
+    const netTrainingWeekdays = normalizeTrainingWeekdays(
+      (profile as { training_weekdays?: unknown } | null | undefined)?.training_weekdays,
+    );
+    const trainingWeekdays: number[] | null =
+      netTrainingWeekdays ?? cachedInputs?.training_weekdays ?? null;
+
+    // When training_weekdays is set it is authoritative for the day COUNT
+    // too — the picker derives the count from the selection on write, so
+    // any divergence between weekdays.length and training_days is a stale
+    // value (e.g. a profile edit raced). Pin them so the bro_split rolling
+    // math (i * trainingDays) and the per-week offsets agree by
+    // construction; otherwise the heal could oscillate.
+    if (trainingWeekdays && trainingWeekdays.length !== trainingDays) {
+      trainingDays = trainingWeekdays.length;
+    }
+
     // Refresh the last-known-good cache from a successful network read so the
     // next offline open has current inputs. Skipped when we resolved from
     // cache (offline) — nothing newer to persist. Awaited but error-tolerant;
@@ -240,6 +273,7 @@ export async function ensureCurrentWeekPlan({ force = false }: EnsureArgs = {}):
         training_days: trainingDays,
         preferred_split: split,
         fitness_level: fitnessLevel,
+        training_weekdays: trainingWeekdays,
       });
     }
 
@@ -357,6 +391,14 @@ export async function ensureCurrentWeekPlan({ force = false }: EnsureArgs = {}):
       if (!stored) return false;
       // planHistory only affects exercise selection, never dates/types, so
       // the comparison canonical can be derived without fetching history.
+      // selectedDayOffsets MUST be derived from training_weekdays here so
+      // the canonical comparison agrees with the per-week generation loop
+      // below — both feed the SAME weekdays into the SAME helper. If we
+      // skipped this for the heal, a user with Mon/Wed/Fri would see the
+      // active row regenerated every focus (default offsets [0,2,4] would
+      // place sessions on Sun/Tue/Thu instead, never matching the stored
+      // weekday-correct row).
+      const healOffsets = weekdaysToOffsets(trainingWeekdays, horizonAnchor);
       const canonical = deriveCanonicalWeek({
         weekStartIso: horizonAnchor,
         completedBeforeWeek,
@@ -366,6 +408,7 @@ export async function ensureCurrentWeekPlan({ force = false }: EnsureArgs = {}):
         split,
         blockIndex: Math.floor(weeksBetween(blockAnchor, horizonAnchor) / 4),
         blockWeek: computeBlockWeek(horizonAnchor),
+        selectedDayOffsets: healOffsets ?? undefined,
       });
       return weekRowMatchesCanonical(stored, canonical);
     })();
@@ -468,6 +511,15 @@ export async function ensureCurrentWeekPlan({ force = false }: EnsureArgs = {}):
       // sets/reps and stamps PlanDay.deload=true. Computed purely from the
       // anchor distance so it's deterministic on regenerate.
       const blockWeek = (weeksFromAnchor % 4) + 1;
+      // Per-week offsets from the user's stored weekdays. Each row is its
+      // own 7-day window anchored at `ws`, so the offset values depend on
+      // ws's day-of-week — Mon/Wed/Fri lands at [1,3,5] from a Sunday
+      // week_start but at [0,2,5] from a Wednesday week_start. null
+      // (legacy / 1/2/7-day users) → generator falls back to
+      // pickDefaultDayOffsets(trainingDays). The same helper drove the
+      // self-heal canonical above, so by construction the row written here
+      // matches what the heal would compute — no oscillation.
+      const offsets = weekdaysToOffsets(trainingWeekdays, ws);
       const days = generatePlan({
         fitnessLevel,
         trainingDays,
@@ -488,6 +540,7 @@ export async function ensureCurrentWeekPlan({ force = false }: EnsureArgs = {}):
         // (progressive-overload substrate). Rotates at the block boundary.
         blockIndex,
         blockWeek,
+        selectedDayOffsets: offsets ?? undefined,
       });
       if (i === 0) regeneratedActiveDays = days;
       const { error: upsertError } = await supabase.from('weekly_plans').upsert(

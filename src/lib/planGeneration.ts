@@ -41,8 +41,15 @@ import { EXERCISES } from '../constants/exercises';
  *   5 — exercise selection ranks by balanced score (effectiveness+popularity);
  *       guarantees a compound per major-muscle slot (back: vertical+horizontal);
  *       isPrimary anchors held stable across blocks. Random selection replaced.
+ *   6 — bro_split fixed rotation now ROLLS across weeks via dayIndexOffset
+ *       (was: stable weekly template keyed on in-week index only). A user with
+ *       trainingDays < dayTypes.length (e.g. 3 days/week bro_split) used to
+ *       be structurally unable to reach arms or legs; the rolling phase
+ *       walks the full template over the mesocycle. inWeekStartIndex is now
+ *       a no-op for fixed splits; dayIndexOffset is the canonical phase param
+ *       across all rotations. Old future rows rebuild on next app open.
  */
-export const CURRENT_PLAN_VERSION = 5;
+export const CURRENT_PLAN_VERSION = 6;
 
 export type FitnessLevel = 'beginner' | 'intermediate' | 'advanced';
 export type Location = 'gym' | 'home';
@@ -837,34 +844,40 @@ export function generatePlan(args: GeneratePlanArgs): PlanDay[] {
       dayType = dayTypes[cycleIndex % dayTypes.length];
       cycleIndex++;
     } else if (rule.rotation === 'fixed') {
-      // A 'fixed' split is a STABLE WEEKLY TEMPLATE: every week is the same
-      // assignment (chest, back, shoulders, arms, legs, ...), keyed on the
-      // in-week index — NOT the running globalI. Using globalI here drifted the
-      // phase by (trainingDays mod dayTypes.length) every week, so week 2
-      // started on back, week 3 on shoulders, etc., and the calendar spliced
-      // those drifting weeks into a chest-less, arms-heavy mess. Cross-week
-      // variety for a bro split comes from exercise SELECTION (planHistory),
-      // not from rotating which muscle lands on which day.
+      // A 'fixed' split (bro_split) is a STABLE WEEKLY TEMPLATE — within a
+      // single week, the muscle assigned to inWeekIdx N is deterministic.
+      // Across weeks the phase ROLLS so every muscle is reached over the
+      // mesocycle. Before the roll, a user with trainingDays < dayTypes.length
+      // (e.g. 3 days/week on bro_split) only ever trained chest/back/shoulders
+      // — arms and legs were structurally unreachable because the template
+      // restarted at index 0 every week.
       //
-      // PHASE OFFSET (startInWeekIdx): shifts WHICH muscle lands on
-      // inWeekIdx 0. Default 0 — chest leads, identical to the prior
-      // behavior. A non-zero value lets buildCatchUpRows start a mid-
-      // mesocycle bro_split catch-up at the user's true next type
-      // (shoulders/arms/legs/...) instead of restarting at chest. The
-      // template is still stable across weeks: every week's inWeekIdx 0
-      // is the SAME shifted muscle, so the user's weekly schedule
-      // doesn't wander once it's set.
+      // PHASE: `dayIndexOffset` is the canonical absolute position param,
+      // identical to how cycle/alternating splits resume. `week *
+      // baseOffsets.length` advances the phase by `trainingDays` per week
+      // within a single multi-week call so a 3-day user walks the full 5-type
+      // rotation in (5/3) weeks ≈ 2 weeks. Per-week single-call paths
+      // (planSync.ensureCurrentWeekPlan) pass `dayIndexOffset =
+      // completedBeforeWeek + i * trainingDays` and rely on `week === 0`
+      // inside this loop, so the two paths agree.
+      //
+      // `inWeekStartIndex` is now a documented NO-OP for the fixed branch
+      // (it used to be the only phase source). It's still accepted by
+      // generatePlan for API stability; buildCatchUpRows used to pass it
+      // and has been cleaned up to rely solely on dayIndexOffset. The
+      // parameter is left in place to avoid breaking any external caller.
       //
       // dropOrder supplies the extra day(s) when training days exceed
-      // dayTypes.length (bro_split with 6–7 days/week). It is NOT
-      // shifted by startInWeekIdx — dropOrder is a deterministic
-      // 6th/7th-day filler whose semantics ("repeat arms then
-      // shoulders") don't depend on the rotation phase.
+      // dayTypes.length (bro_split with 6–7 days/week). It is NOT phase-
+      // shifted — dropOrder is a deterministic 6th/7th-day filler whose
+      // semantics ("repeat arms then shoulders") don't depend on the
+      // rotation phase.
       const dropOrder = (rule as any).dropOrder as string[] | undefined;
       if (inWeekIdx >= dayTypes.length && dropOrder && dropOrder.length > 0) {
         dayType = dropOrder[(inWeekIdx - dayTypes.length) % dropOrder.length];
       } else {
-        dayType = dayTypes[(inWeekIdx + startInWeekIdx) % dayTypes.length];
+        const phase = dayIndexOffset + week * baseOffsets.length;
+        dayType = dayTypes[(inWeekIdx + phase) % dayTypes.length];
       }
     } else {
       dayType = dayTypes[0];

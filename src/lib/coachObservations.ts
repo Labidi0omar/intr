@@ -24,26 +24,43 @@
 //   salience  – 0..1. Drives the selector ranking; salience >= 0.8 is the
 //               threshold to earn a second slot on a focus.
 //
-//               Current ordering (highest → lowest):
-//                 0.97  session_pr      (a real strength PR — earned
-//                                        today on this lift — leads the
-//                                        day it happens, above the
-//                                        recurring block-position line)
-//                 0.95  block_position  (weeks 3/4 — leads on non-PR
-//                                        days so the user sees the
-//                                        deload signal before a per-
-//                                        lift progression line)
-//                 0.92  pushing_hard    (SYNTHESIS — progression + repeated
-//                                        fatigue; outranks the up it subsumes)
-//                 0.9   lift_progression:up / back_on_track (SYNTHESIS)
-//                 0.88  grinding        (SYNTHESIS — stall/decline + low energy)
-//                 0.8   lift_progression:stall
-//                 0.7   lift_progression:comeback / consistency
-//                 0.6   cold_start (calibration) / dialed_in
-//                 0.55  cold_start (plan_rationale)
-//                 0.5   effort_zone
-//                 0.4   (deprecated — was block_position before the raise)
-//                 0.1   briefing_fallback
+//               Current ordering — re-ranked to put VALUABLE READS first.
+//               The dashboard hero is "read + directive": where the user is
+//               + what to do today. Pure description (a bare PR / "new high")
+//               must NEVER win on its own — those are demoted below the
+//               state-aware reads. Highest → lowest:
+//
+//                 PROTECTIVE / BACK-OFF (the "ease up" reads):
+//                   0.96  grinding         (SYNTHESIS — stall/decline + low energy)
+//                   0.95  block_position:4 (recovery week earned)
+//
+//                 GREEN-LIGHT (the "you've got room" reads):
+//                   0.9   pushing_hard     (SYNTHESIS — progression + fatigue
+//                                           → bank the win, ease the volume)
+//                   0.88  back_on_track    (SYNTHESIS — comeback + progression)
+//
+//                 TACTICAL STALL (the "one more rep before adding weight" read):
+//                   0.85  lift_progression:stall
+//
+//                 CONSISTENCY:
+//                   0.75  consistency
+//
+//                 MESOCYCLE FRAMING:
+//                   0.7   block_position:3 (last hard build before back-off)
+//
+//                 RETURN:
+//                   0.65  comeback        (whole-training; was 1.0)
+//
+//                 BARE DESCRIPTION (lowest — must still carry a directive):
+//                   0.62  session_pr       (was 0.97 — demoted; today's PR
+//                                           only leads when nothing else
+//                                           qualifies, and the phrasing
+//                                           always includes "hold/cement/
+//                                           don't chase another today")
+//                   0.6   lift_progression:comeback / dialed_in / calibration
+//                   0.55  lift_progression:up / plan_rationale
+//                   0.5   effort_zone
+//                   0.1   briefing_fallback / rest_day
 //
 //               Composites also SUBSUME their component single-facts in the
 //               selector (see selectTopObservations) — so the coach speaks the
@@ -153,14 +170,30 @@ export type RestDayObservation = BaseObs & {
 };
 
 /** Cold-start "why this plan" line — explains the chosen split in terms of
- *  the user's training_days. Fires only while ramping (totalCompleted < 8)
- *  so it auto-retires the moment real signal appears, both by the guard
- *  here and by salience ordering. factSig is per-split so a returning user
- *  who changes their schedule re-hears it for the new split. */
+ *  the user's training_days, optionally personalised on the onboarding-time
+ *  goal + priority. Fires only while ramping (totalCompleted < 8) so it
+ *  auto-retires the moment real signal appears, both by the guard here and
+ *  by salience ordering.
+ *
+ *  factSig is per-split AND per-(goal,priority) so a user who edits any of
+ *  those re-hears the rationale tuned to the new combination instead of
+ *  being permanently deduped on the prior split-only sig.
+ *
+ *  goal / priority are optional (legacy rows pre-date them, and onboarding
+ *  itself allows priority to stay null). When absent the phraser falls back
+ *  to the existing split-only line. */
+export type PlanRationaleGoal = 'strength' | 'muscle' | 'general';
 export type PlanRationaleObservation = BaseObs & {
   type: 'plan_rationale';
   split: string;
   trainingDays: number;
+  /** Onboarding goal. Null/undefined means "we don't know" — phraser uses
+   *  the generic split line. */
+  goal?: PlanRationaleGoal | null;
+  /** Onboarding priority — one of the muscle buckets ('chest','back',
+   *  'shoulders','arms','legs') or a key compound ('bench','squat',
+   *  'deadlift'). Null = no preference. */
+  priority?: string | null;
 };
 
 /** Cold-start "I'm learning you" line. Bare `'calibration'` factSig — once
@@ -288,6 +321,15 @@ export interface ObservationsInput {
   /** profiles.training_days. Used by plan_rationale to ground the "{N} days,
    *  so push/pull/legs" framing in a real number. */
   trainingDays: number | null;
+  /** profiles.goal — 'strength' | 'muscle' | 'general' | null. When set the
+   *  cold-start plan_rationale uses a goal-specific line instead of the
+   *  generic split copy. Null when the legacy row pre-dates onboarding goal
+   *  capture or the user re-onboarded without one. */
+  goal?: PlanRationaleGoal | null;
+  /** profiles.priority — one of the muscle buckets / key compounds the
+   *  onboarding flow allows. Wins over goal in the rationale phrasing when
+   *  present (the user named a specific thing they want to push). */
+  priority?: string | null;
   /** Days since the user's earliest completed session. NULL means brand
    *  new — no completed sessions yet. Builders read null as "first session
    *  hasn't happened" (collapses to "no baseline" in computeGapDays and
@@ -373,7 +415,7 @@ export function buildLiftProgression(
         subtype: 'comeback',
         id: `lift_progression:${lift}`,
         factSig: `comeback-${layoff}`,
-        salience: 0.7,
+        salience: 0.6,
         eventDate: last.date,
         lift,
         days: layoff,
@@ -407,7 +449,11 @@ export function buildLiftProgression(
       subtype: 'up',
       id: `lift_progression:${lift}`,
       factSig: `up-${fmtFactKg(last.topKg)}`,
-      salience: 0.9,
+      // Demoted: a bare "lift up" is description, not a coaching read.
+      // The hero-eligible reads above (protective/green-light/stall/
+      // consistency/mesocycle) lead. The phraser still attaches a
+      // forward directive ("clean reps today, no max attempts").
+      salience: 0.55,
       eventDate: last.date,
       lift,
       from: tailStart.topKg,
@@ -424,7 +470,10 @@ export function buildLiftProgression(
       subtype: 'stall',
       id: `lift_progression:${lift}`,
       factSig: `stall-${fmtFactKg(last.topKg)}-${stallRun}`,
-      salience: 0.8,
+      // Tactical: stalls earn a directive ("one more rep before you add
+      // weight") — that's an actionable coaching call, so the stall sits
+      // above consistency/comeback/bare PR.
+      salience: 0.85,
       eventDate: last.date,
       lift,
       weight: last.topKg,
@@ -452,12 +501,13 @@ export function buildSessionPr(
     type: 'session_pr',
     id: `session_pr:${lift}`,
     factSig: `pr-${fmtFactKg(newKg)}`,
-    // 0.97 — a real PR is the headline of the day. It outranks the
-    // recurring block-position line (0.95) so the user sees "new
-    // bench best" rather than "Week 3 — last build before deload" on
-    // the day it actually happens. On non-PR days block_position
-    // resumes the lead over ordinary progression (0.9).
-    salience: 0.97,
+    // Demoted (was 0.97). A bare PR is DESCRIPTION — what already
+    // happened. The hero needs read + directive: where you are AND
+    // what to do today. Protective/green-light/stall reads lead;
+    // PR only wins when nothing else qualifies, and the phrasing
+    // always attaches a forward directive ("bank it; the next jump
+    // waits", "cement the form; don't chase another today").
+    salience: 0.62,
     eventDate: todayIso,
     lift,
     newKg,
@@ -484,7 +534,7 @@ export function buildConsistency(
       type: 'consistency',
       id: 'consistency:days14',
       factSig: `consist-${d14}of14`,
-      salience: 0.7,
+      salience: 0.75,
       eventDate: todayIso,
       metric: 'days14',
       count: d14,
@@ -495,7 +545,7 @@ export function buildConsistency(
       type: 'consistency',
       id: 'consistency:days28',
       factSig: `consist-${d28}of28`,
-      salience: 0.7,
+      salience: 0.75,
       eventDate: todayIso,
       metric: 'days28',
       count: d28,
@@ -513,15 +563,18 @@ export function buildBlockPosition(
   todayIso: string,
 ): BlockPositionObservation | null {
   if (blockWeek !== 3 && blockWeek !== 4) return null;
+  // Week 4 = recovery week earned — PROTECTIVE tier (0.95). Leads the
+  // dashboard so the user sees the "ease up" signal before any bare
+  // lift description.
+  // Week 3 = last hard build before back-off — MESOCYCLE FRAMING tier
+  // (0.7). Useful context but below the actionable green-light reads
+  // (pushing_hard / back_on_track / stall).
+  const salience = blockWeek === 4 ? 0.95 : 0.7;
   return {
     type: 'block_position',
     id: `block_position:${blockWeek}`,
     factSig: `block-${blockWeek}`,
-    // 0.95 — leads the dashboard. The "Week 3 — last build before
-    // deload" / "Week 4 — deload earned" signal is a session-shaping
-    // call that should outrank per-lift progression copy. The selector
-    // tie-break (eventDate desc) keeps the line current.
-    salience: 0.95,
+    salience,
     eventDate: todayIso,
     blockWeek,
   };
@@ -729,7 +782,11 @@ export function buildComeback(
     type: 'comeback',
     id: 'comeback',
     factSig: `gap-${g}`,
-    salience: 1.0,
+    // Demoted from 1.0. Coming back from missed sessions is meaningful
+    // but the SAME-DAY action — what to do today — sits above it
+    // (deload week / pushing_hard / stall all carry the "what now"
+    // information a comeback line lacks).
+    salience: 0.65,
     eventDate: todayIso,
     gapDays: g,
   };
@@ -751,18 +808,33 @@ export function buildPlanRationale(
   trainingDays: number | null,
   totalCompleted: number,
   todayIso: string,
+  opts?: { goal?: PlanRationaleGoal | null; priority?: string | null },
 ): PlanRationaleObservation | null {
   if (!split) return null;
   if (Math.floor(totalCompleted ?? 0) >= 8) return null;
   const td = Math.max(0, Math.min(7, Math.floor(trainingDays ?? 0)));
+  const goal = opts?.goal ?? null;
+  const priorityRaw = (opts?.priority ?? '').trim().toLowerCase();
+  const priority = priorityRaw === '' ? null : priorityRaw;
+  // factSig advances with goal/priority so a returning user whose onboarding
+  // inputs change re-hears the new line. Legacy callers that omit opts keep
+  // the bare `rationale-${split}` sig so existing dedup history continues
+  // to apply — the per-personalisation suffix is appended only when there's
+  // something extra to encode.
+  const suffix =
+    goal == null && priority == null
+      ? ''
+      : `-g${goal ?? 'x'}-p${priority ?? 'x'}`;
   return {
     type: 'plan_rationale',
     id: `plan_rationale:${split}`,
-    factSig: `rationale-${split}`,
+    factSig: `rationale-${split}${suffix}`,
     salience: 0.55,
     eventDate: todayIso,
     split,
     trainingDays: td,
+    goal,
+    priority,
   };
 }
 
@@ -868,8 +940,8 @@ const COMPOSITE_FATIGUE_MIN = 2;
 /**
  * pushing_hard — progression on key lifts WHILE fatigue is repeating
  * (≥2 low-energy sessions and/or ≥2 RIR misses). Subsumes every "up" fact so
- * the coach says the synthesis, not "bench up". Salience 0.92 (> up 0.9,
- * < block_position 0.95 / PR 0.97).
+ * the coach says the synthesis, not "bench up". GREEN-LIGHT tier (0.9) —
+ * leads when no protective read fires (grinding 0.96, block_position:4 0.95).
  */
 export function buildPushingHard(
   progressing: LiftFact[],
@@ -888,7 +960,7 @@ export function buildPushingHard(
     type: 'pushing_hard',
     id: 'pushing_hard',
     factSig: `pushing-${fmtFactKg(top.to ?? 0)}-${fatigue}`,
-    salience: 0.92,
+    salience: 0.9,
     eventDate: todayIso,
     lift: top.name,
     fatigue,
@@ -899,7 +971,8 @@ export function buildPushingHard(
 /**
  * grinding — a stall or decline WHILE energy is repeatedly low (≥2). The
  * slog: acknowledge it and point at recovery. Subsumes the stall facts (a
- * decline has no single observation). Salience 0.88 (> stall 0.8).
+ * decline has no single observation). PROTECTIVE tier (0.96) — the lead
+ * read when it fires; ahead of block_position:4 (0.95).
  */
 export function buildGrinding(
   strained: Array<LiftFact & { kind: 'stall' | 'decline' }>,
@@ -914,7 +987,7 @@ export function buildGrinding(
     type: 'grinding',
     id: 'grinding',
     factSig: `grinding-${chosen.name}-${chosen.kind}`,
-    salience: 0.88,
+    salience: 0.96,
     eventDate: todayIso,
     lift: chosen.name,
     strain: chosen.kind,
@@ -939,7 +1012,9 @@ export function buildBackOnTrack(
     type: 'back_on_track',
     id: 'back_on_track',
     factSig: `backontrack-${fmtFactKg(top.to ?? 0)}`,
-    salience: 0.9,
+    // GREEN-LIGHT tier — sits just under pushing_hard (0.9) so a
+    // co-occurring "running hot" read still leads when both qualify.
+    salience: 0.88,
     eventDate: todayIso,
     lift: top.name,
     subsumes: [
@@ -1006,6 +1081,7 @@ export function deriveObservations(input: ObservationsInput): CoachObservation[]
     input.trainingDays,
     input.totalCompleted,
     input.todayIso,
+    { goal: input.goal ?? null, priority: input.priority ?? null },
   );
   if (rationale) out.push(rationale);
 

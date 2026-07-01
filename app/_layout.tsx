@@ -131,6 +131,13 @@ function RootLayoutInner() {
         <Stack.Screen name="workout" />
         <Stack.Screen name="recovery" />
         <Stack.Screen name="onboarding" />
+        {/* DEV-ONLY routes. The screen file itself renders a guard view
+            in production (so a release build that somehow navigates here
+            sees a "not available" notice, never the wipe affordance) and
+            the only entry point is a __DEV__-gated long-press on the
+            profile username. Registering the screen unconditionally is
+            fine — Expo Router won't auto-navigate to it. */}
+        <Stack.Screen name="dev-scenarios" options={{ animation: 'slide_from_right' }} />
       </Stack>
     </>
   );

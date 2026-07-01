@@ -60,7 +60,7 @@ export default function LogInScreen() {
           .single();
         
         if (profile?.onboarding_complete) {
-          router.replace('/home');
+          router.replace('/(tabs)/home');
         } else {
           router.replace('/onboarding');
         }
@@ -158,7 +158,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   globalError: {
     fontFamily: typography.family.bodyMedium,
     fontSize: typography.size.sm,
-    color: colors.accentTeal,
+    color: colors.accentCoral,
     marginTop: layout.spacing.xs,
     textAlign: 'center',
   }

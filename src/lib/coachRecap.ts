@@ -325,6 +325,46 @@ function cap(s: string): string {
   return s.length === 0 ? s : s[0].toUpperCase() + s.slice(1);
 }
 
+// ─── Pure: recap sanitizer (defense in depth) ──────────────────────────
+//
+// The edge function already caps length and the system prompt forbids
+// medical/injury advice, but the recap Path A output is rendered raw on
+// the Coach tab with no other guard. This is the client-side check that
+// the model obeyed: length cap + a keyword block on medical/injury/
+// nutrition advice the prompt explicitly bans. On any failure the caller
+// falls back to the deterministic buildFallbackRecap.
+
+/** Hard length cap for the recap message. Matches the edge function's
+ *  slice(0, 280) and the system prompt's "Under 280 characters" rule. */
+const MAX_RECAP_LEN = 280;
+
+/** Medical / injury / nutrition advice the system prompt forbids. If the
+ *  model disobeyed and produced any of these, reject the line. Word-
+ *  boundary, case-insensitive. */
+const MEDICAL_ADVICE_RE = /\b(physio|physical therapist|doctor|see a|medical|injury|injured|hurt yourself|ice it|rest tomorrow|eat \d+|grams of protein|diagnos|rehab)\b/i;
+
+/**
+ * Validate a recap message string from the edge function. Returns the
+ * trimmed message if it passes, or null if it should be rejected (caller
+ * then falls back to buildFallbackRecap).
+ *
+ * Rules:
+ *   1. Non-empty string after trim.
+ *   2. ≤ MAX_RECAP_LEN (280) chars.
+ *   3. No medical / injury / nutrition advice keywords.
+ *   4. No emoji (same unicode guard as coachVoiceAI).
+ */
+export function sanitizeRecap(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+  if (trimmed.length > MAX_RECAP_LEN) return trimmed.slice(0, MAX_RECAP_LEN);
+  if (MEDICAL_ADVICE_RE.test(trimmed)) return null;
+  // Emoji guard — same range as coachVoiceAI's EMOJI_RE.
+  if (/[☀-➿\u{1F300}-\u{1FAFF}]/u.test(trimmed)) return null;
+  return trimmed;
+}
+
 // ─── Network call ──────────────────────────────────────────────────────
 
 /** Default timeout — Haiku typically returns in ~1s; 8s is enough headroom
@@ -363,8 +403,8 @@ export async function requestCoachRecap(
     const { data, error } = raced as { data: unknown; error: unknown };
     if (error) return { kind: 'error' };
 
-    const msg = (data as { message?: unknown } | null)?.message;
-    if (typeof msg !== 'string' || msg.trim().length === 0) return { kind: 'error' };
+    const msg = sanitizeRecap((data as { message?: unknown } | null)?.message);
+    if (!msg) return { kind: 'error' };
 
     return { kind: 'ok', message: msg };
   } catch {

@@ -173,7 +173,6 @@ export default function ProgressScreen() {
     const styles = makeStyles(colors);
     const [loading, setLoading] = useState(true);
     const [groups, setGroups] = useState<ExerciseGroup[]>([]);
-    const [showMuscleSheet, setShowMuscleSheet] = useState(false);
     const [selectedMuscle, setSelectedMuscle] = useState('ALL');
     const [muscleGroups, setMuscleGroups] = useState<string[]>([]);
     const [filteredGroups, setFilteredGroups] = useState<ExerciseGroup[]>([]);
@@ -351,50 +350,10 @@ const makeStyles = (colors: any) => StyleSheet.create({
     },
     filterLabelText: {
         fontFamily: typography.family.body,
-        fontSize: 11,
+        fontSize: typography.size.s11,
         color: colors.textMuted,
         textTransform: 'uppercase',
         letterSpacing: 2,
-    },
-    // Modal bottom sheet
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.6)',
-        justifyContent: 'flex-end',
-    },
-    modalSheet: {
-        backgroundColor: colors.surface,
-        borderTopLeftRadius: layout.cardRadius,
-        borderTopRightRadius: layout.cardRadius,
-        padding: layout.spacing.lg,
-        paddingBottom: layout.spacing.xl,
-        borderWidth: 1,
-        borderColor: colors.cardBorder,
-        borderBottomWidth: 0,
-    },
-    modalHandle: {
-        width: 36,
-        height: 4,
-        borderRadius: 2,
-        backgroundColor: colors.textMuted,
-        alignSelf: 'center',
-        marginBottom: layout.spacing.md,
-    },
-    sheetOption: {
-        paddingVertical: layout.spacing.md,
-        paddingHorizontal: layout.spacing.md,
-        borderLeftWidth: 1,
-        borderLeftColor: 'transparent',
-        marginBottom: layout.spacing.xs,
-    },
-    sheetOptionActive: {
-        borderLeftColor: colors.borderActive,
-    },
-    sheetOptionText: {
-        fontFamily: typography.family.bodyMedium,
-        fontSize: 14,
-        color: colors.textPrimary,
-        textTransform: 'uppercase',
     },
     card: {
         backgroundColor: colors.surface,
@@ -416,28 +375,28 @@ const makeStyles = (colors: any) => StyleSheet.create({
     },
     effortEyebrow: {
         fontFamily: typography.family.bodyMedium,
-        fontSize: 11,
+        fontSize: typography.size.s11,
         color: colors.textMuted,
         letterSpacing: 2,
         marginBottom: layout.spacing.sm,
     },
     effortHeadline: {
         fontFamily: typography.family.body,
-        fontSize: 16,
+        fontSize: typography.size.s16,
         color: colors.textPrimary,
         lineHeight: 22,
         marginBottom: layout.spacing.md,
     },
     effortBody: {
         fontFamily: typography.family.body,
-        fontSize: 14,
+        fontSize: typography.size.s14,
         color: colors.textSecondary,
         lineHeight: 20,
     },
     effortBarTrack: {
         height: 6,
         backgroundColor: colors.cardBorder,
-        borderRadius: 3,
+        borderRadius: layout.radii.r3,
         overflow: 'hidden',
         marginBottom: layout.spacing.sm,
     },
@@ -447,7 +406,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
     },
     effortFootnote: {
         fontFamily: typography.family.body,
-        fontSize: 11.5,
+        fontSize: typography.size.s11_5,
         color: colors.textMuted,
         lineHeight: 16,
     },

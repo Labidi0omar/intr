@@ -17,7 +17,7 @@ import * as Sharing from 'expo-sharing';
 import RNShare, { Social } from 'react-native-share';
 import ViewShot from 'react-native-view-shot';
 import { useTheme } from '../context/ThemeContext';
-import { typography } from '../theme';
+import { typography, layout } from '../theme';
 import {
   buildInstagramStoryBackgroundPayload,
   pickShareImageEncoding,
@@ -503,7 +503,7 @@ export default function ShareCard({
               onLoad={() => onCompositePhotoLoaded(composite.photoUri)}
             />
           ) : (
-            <View style={[StyleSheet.absoluteFill, { backgroundColor: '#070708' }]}>
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.background }]}>
               {/* Subtle on-brand glow so "card only" isn't a flat rectangle. */}
               <View style={[styles.compositeGlow, { backgroundColor: colors.accentTeal }]} />
             </View>
@@ -665,7 +665,7 @@ async function toBase64DataUrl(fileUri: string): Promise<string | null> {
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+    backgroundColor: 'rgba(0, 0, 0, 0.85)', // value matches colors.scrimDeep; kept inline because StyleSheet.create is module-scope (no `colors` available).
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -676,7 +676,7 @@ const styles = StyleSheet.create({
     width: CARD_BASE_W,
     padding: 32,
     borderWidth: 1,
-    borderRadius: 16,
+    borderRadius: layout.radii.r16,
   },
   // Off-screen render targets (composite + aspect measuring) — laid out but
   // never shown to the user.
@@ -698,6 +698,9 @@ const styles = StyleSheet.create({
     opacity: 0.12,
   },
   // ── Editor ───────────────────────────────────────────────────────
+  // Pure-black editor backdrop and `#070708` canvas (matches colors.background)
+  // are inlined because this is module-scope StyleSheet — useTheme()'s `colors`
+  // is only available inside the component.
   editorRoot: {
     flex: 1,
     backgroundColor: '#000',
@@ -707,14 +710,14 @@ const styles = StyleSheet.create({
   },
   editorHint: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 12,
+    fontSize: typography.size.s12,
     letterSpacing: 1,
     marginBottom: 12,
     textTransform: 'uppercase',
   },
   editorCanvas: {
     overflow: 'hidden',
-    borderRadius: 14,
+    borderRadius: layout.radii.r14,
     borderWidth: 1,
     backgroundColor: '#070708',
   },
@@ -751,7 +754,7 @@ const styles = StyleSheet.create({
     minWidth: 130,
     height: 50,
     borderWidth: 1,
-    borderRadius: 12,
+    borderRadius: layout.radii.r12,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 18,
@@ -761,7 +764,7 @@ const styles = StyleSheet.create({
   },
   editorBtnText: {
     fontFamily: typography.family.heading,
-    fontSize: 13,
+    fontSize: typography.size.s13,
     letterSpacing: 1,
   },
   // ── Card content ─────────────────────────────────────────────────
@@ -772,12 +775,12 @@ const styles = StyleSheet.create({
   },
   intrText: {
     fontFamily: typography.family.heading,
-    fontSize: 12,
+    fontSize: typography.size.s12,
     letterSpacing: 2,
   },
   dateText: {
     fontFamily: typography.family.heading,
-    fontSize: 12,
+    fontSize: typography.size.s12,
     letterSpacing: 2,
   },
   divider: {
@@ -787,23 +790,23 @@ const styles = StyleSheet.create({
   },
   musclesText: {
     fontFamily: typography.family.heading,
-    fontSize: 22,
+    fontSize: typography.size.s22,
     textTransform: 'uppercase',
   },
   exercisesText: {
     fontFamily: typography.family.body,
-    fontSize: 13,
+    fontSize: typography.size.s13,
     marginTop: 8,
   },
   energyLabelText: {
     fontFamily: typography.family.body,
-    fontSize: 11,
+    fontSize: typography.size.s11,
     letterSpacing: 2,
     textTransform: 'uppercase',
   },
   outcomeText: {
     fontFamily: typography.family.heading,
-    fontSize: 28,
+    fontSize: typography.size.s28,
     textTransform: 'uppercase',
     marginTop: 4,
   },
@@ -811,28 +814,28 @@ const styles = StyleSheet.create({
   igButton: {
     width: 320,
     height: 52,
-    borderRadius: 12,
+    borderRadius: layout.radii.r12,
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 24,
   },
   igButtonText: {
     fontFamily: typography.family.heading,
-    fontSize: 13,
+    fontSize: typography.size.s13,
     letterSpacing: 1,
   },
   secondaryButton: {
     width: 320,
     height: 44,
     borderWidth: 1,
-    borderRadius: 12,
+    borderRadius: layout.radii.r12,
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 10,
   },
   secondaryButtonText: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 12,
+    fontSize: typography.size.s12,
     letterSpacing: 1,
   },
   linkButton: {
@@ -847,7 +850,7 @@ const styles = StyleSheet.create({
   },
   closeButtonText: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 11,
+    fontSize: typography.size.s11,
     letterSpacing: 1,
   },
 });

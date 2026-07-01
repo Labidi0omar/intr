@@ -48,3 +48,7 @@ app-example
 
 # Cached free-exercise-db snapshot for scripts/fix-exercise-images.js — not needed at runtime
 fedb.json
+
+graphify-out/
+_chk.mjs
+_regen_tmp.ts

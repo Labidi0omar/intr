@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "intr-admin",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "intr-admin", "run", "dev"],
+      "port": 5173
+    },
+    {
+      "name": "legal-site",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["-y", "serve", "legal", "-l", "4321", "--no-port-switching"],
+      "port": 4321
+    }
+  ]
+}

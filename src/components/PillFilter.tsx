@@ -68,7 +68,7 @@ const makeStyles = (colors: any) =>
     },
     pillText: {
       fontFamily: typography.family.body,
-      fontSize: 11,
+      fontSize: typography.size.s11,
       letterSpacing: 1.2,
       color: colors.textSecondary,
       textTransform: 'uppercase',

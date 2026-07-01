@@ -178,7 +178,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   globalError: {
     fontFamily: typography.family.bodyMedium,
     fontSize: typography.size.sm,
-    color: colors.accentTeal,
+    color: colors.accentCoral,
     marginTop: layout.spacing.xs,
     textAlign: 'center',
   }

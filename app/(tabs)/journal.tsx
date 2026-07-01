@@ -223,23 +223,58 @@ export default function JournalScreen() {
         reportSilent(e, 'journal:fetchEnergyContext');
       }
 
-      const { data, error } = await supabase.functions.invoke('daily-reflection', {
-        body: {
-          type: 'journal',
-          user_text: trimmed,
-          energy_score: energyScore,
-          mood_tag: moodTag,
-        },
-      });
+      // 8s client-side timeout via Promise.race. Independent of the gate —
+      // fixes the pre-existing submit-hang when the edge function is slow.
+      const TIMEOUT_SENTINEL: unique symbol = Symbol('daily-reflection-timeout') as any;
+      type InvokeResult = { data: { content?: string; gate?: string } | null; error: unknown };
+      let data: { content?: string; gate?: string } | null = null;
+      let invokeError: unknown = null;
+      try {
+        const invokePromise = supabase.functions.invoke('daily-reflection', {
+          body: {
+            type: 'journal',
+            user_text: trimmed,
+            energy_score: energyScore,
+            mood_tag: moodTag,
+          },
+        }) as Promise<InvokeResult>;
+        const timeoutPromise = new Promise<typeof TIMEOUT_SENTINEL>(resolve => {
+          setTimeout(() => resolve(TIMEOUT_SENTINEL), 8000);
+        });
+        const raced = await Promise.race([invokePromise, timeoutPromise]);
+        if (raced === TIMEOUT_SENTINEL) {
+          invokeError = new Error('daily-reflection timed out');
+        } else {
+          data = raced.data;
+          invokeError = raced.error;
+        }
+      } catch (e) {
+        invokeError = e;
+      }
 
-      if (error) throw new Error(error.message || 'Edge function call failed');
+      // Decide what to render. Three cases:
+      //   1. gate === 'off'   → save entry, show "reflection coming later".
+      //   2. content present   → save entry with reflection, render bubble.
+      //   3. anything else     → save entry, no reflection card, no spinner.
+      //                          (timeout, network error, empty body, 5xx)
+      const gateOff = data?.gate === 'off';
+      const realContent =
+        typeof data?.content === 'string' && data.content.trim().length > 0
+          ? data.content
+          : '';
+      // Persisted on disk: empty when gated off or when we got nothing usable.
+      // The gate-off display copy lives ONLY in state so a later gate-on
+      // doesn't show "coming back later" as that day's permanent reflection.
+      const persistedAi = gateOff || !realContent ? '' : realContent;
+      const displayedAi = gateOff
+        ? 'Saved. Your reflection will come back when the coach is ready.'
+        : realContent;
 
-      const content = data?.content || '';
       const today = todayDateStr();
       const entry: JournalEntry = {
         date: today,
         userText: trimmed,
-        aiResponse: content,
+        aiResponse: persistedAi,
         createdAt: new Date().toISOString(),
       };
 
@@ -252,31 +287,35 @@ export default function JournalScreen() {
               user_id: user.id,
               date: today,
               user_text: trimmed,
-              ai_response: content,
+              ai_response: persistedAi || null,
               updated_at: new Date().toISOString(),
             },
             { onConflict: 'user_id,date' }
           );
         }
       } catch (e) {
-        console.error('Journal Supabase write error:', e);
-        // Continue — local cache still saves below
+        reportSilent(e, 'journal:supabaseWrite');
       }
 
       try {
         await AsyncStorage.setItem(`${JOURNAL_PREFIX}${today}`, JSON.stringify(entry));
       } catch (e) {
-        console.error('Journal cache write error:', e);
+        reportSilent(e, 'journal:cacheWrite');
       }
 
-      // Update local state
       const updated = [entry, ...entries.filter(e => e.date !== today)];
       updated.sort((a, b) => b.date.localeCompare(a.date));
       setEntries(updated);
 
       setHasTodayEntry(true);
-      setAiResponse(content);
+      setAiResponse(displayedAi || null);
       setViewMode('history');
+
+      // Invoke errors are downgraded to Sentry — the entry still saved, the
+      // UI still moves forward, no banner shown. Gate-off is success, not error.
+      if (invokeError && !gateOff) {
+        reportSilent(invokeError, 'journal:invoke');
+      }
     } catch (e: any) {
       console.error('Journal submit error:', e);
       setErrorMsg(e?.message || 'Something went wrong. Try again.');
@@ -455,7 +494,7 @@ const makeStyles = (colors: any) =>
     },
     heading: {
       fontFamily: typography.family.heading,
-      fontSize: 32,
+      fontSize: typography.size.s32,
       color: colors.textPrimary,
       paddingHorizontal: layout.spacing.lg,
       paddingTop: layout.spacing.xl,
@@ -497,7 +536,7 @@ const makeStyles = (colors: any) =>
     },
     journalTabText: {
       fontFamily: typography.family.bodyMedium,
-      fontSize: 15,
+      fontSize: typography.size.s15,
       paddingHorizontal: 12,
     },
 

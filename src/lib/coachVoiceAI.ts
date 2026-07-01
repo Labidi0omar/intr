@@ -28,7 +28,7 @@ import { supabase } from './supabase';
 import { reportSilent } from './errorReporting';
 import { COACH_AI_VOICE } from '../constants/buildInfo';
 import type { Observation } from './coachObservations';
-import { phraseObservation } from './coachVoice';
+import { MAX_HERO_LINE_LEN, phraseObservation } from './coachVoice';
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -36,6 +36,10 @@ import { phraseObservation } from './coachVoice';
  *  in the "no journal fields" test — anything not on this interface CANNOT
  *  reach the edge function via this client. */
 export interface EdgePhrasePayload {
+  /** Optional user name for light personalization. The prompt instructs
+   *  the model to address the user by name occasionally, not every line.
+   *  Never required; older callers that omit it are unaffected. */
+  userName?: string;
   observations: Array<{
     factSig: string;
     observationType: Observation['type'];
@@ -50,9 +54,29 @@ interface EdgePhraseResponse {
   phrasings?: Record<string, string>;
 }
 
-const CACHE_KEY_PREFIX = 'coachVoiceAI:';
+/**
+ * Bump this whenever PHRASE_SYSTEM_PROMPT (in supabase/functions/coach-recap)
+ * or validatePhrasing changes its acceptance contract. The version is baked
+ * into the cache key; any prior cached line is then ignored on read, so a
+ * tightened prompt or validator cannot serve a stale AI line that no longer
+ * meets the bar.
+ *
+ *   v1 — initial: ≤160-char length cap, no-invent / no-emoji / no-bang.
+ *   v2 — ≤90-char hero cap; validator additionally requires a forward
+ *        directive cue (no description-only lines).
+ *   v3 — current: ≤130-char hero cap; exclamation allowed on milestones;
+ *        rhetorical questions accepted as a forward cue. Prompt rewritten
+ *        with few-shot examples and a warmer voice. userName added to the
+ *        payload for light personalization.
+ */
+export const COACH_VOICE_PROMPT_VERSION = 3;
+const CACHE_KEY_PREFIX = `coachVoiceAI:v${COACH_VOICE_PROMPT_VERSION}:`;
 const DEFAULT_TIMEOUT_MS = 6000;
-const MAX_PHRASING_LEN = 160;
+// The hero shows ONE line at editorial scale. Bumped from 90 → 130 (v3)
+// to give the AI room for a warmer, more human line. The layout in
+// CoachVoiceHero (numberOfLines={4}, minimumFontScale={0.65}) handles the
+// extra length. Single source of truth with coachVoice.MAX_HERO_LINE_LEN.
+const MAX_PHRASING_LEN = MAX_HERO_LINE_LEN;
 
 // ── Allowed-number extraction ──────────────────────────────────────────
 //
@@ -149,16 +173,47 @@ function extractNumbers(s: string): string[] {
 const EMOJI_RE = /[☀-➿\u{1F300}-\u{1FAFF}]/u;
 
 /**
+ * Forward-directive cue set. A hero rephrase must read AND tell the user
+ * what to do today — a description-only line ("Bench is moving and you've
+ * hit 30 of 30 sets in the sweet spot.") drops the directive beat and
+ * fails the hero contract. This is a heuristic floor, not a parser; we
+ * err toward falling back to the deterministic line, which is authored
+ * read+directive by construction.
+ *
+ * v3: a rhetorical question ("Ready to chase it?") now counts as a
+ * forward cue — it's a natural coaching tool and the warmer voice
+ * permits it. The question mark itself is a directive pass.
+ *
+ * The set covers the imperative vocabulary the coach actually uses in
+ * the deterministic pools (Hit / Hold / Push / Ease / Bank / Cement / Lock /
+ * Pull / Build / Find / Force / Take / Show / Run / Log / Trust / Follow /
+ * Get / Add / Drop / Move / Protect / Recover / Skip / Work / Empty / Dial
+ * / Stay / Bring / Make / Count / Start / Come / Train / Lighten / Reset /
+ * Sharpen / Nudge / Tap / Go / Leave / Chase / Don't) plus the temporal
+ * anchors "today" / "next time" that mark a forward beat. Word-boundary,
+ * case-insensitive.
+ */
+const DIRECTIVE_CUE_RE = /\b(today|tonight|next time|don't|don’t|hit|keep|hold|push|cement|lock|bank|ease|pull|build|find|force|take|show|run|log|trust|follow|get|add|drop|move|protect|recover|skip|work|empty|dial|stay|bring|make|count|start|come|ride|tune|train|lighten|catch up|sleep|rest|reset|sharpen|nudge|tap|go|leave|chase|back off|hit them)\b/i;
+
+/**
  * Return aiText IF it passes every safety rule, else deterministicLine.
  * Pure: same inputs → same output. Heavily unit-tested because AI output
  * itself is not deterministic — the validator is what makes the system
  * safe to ship.
  *
  * Rules (any fail → fallback):
- *   1. Non-empty after trim, ≤ 160 chars.
+ *   1. Non-empty after trim, ≤ MAX_PHRASING_LEN (130) chars.
  *   2. No emoji (unicode range guard — matches the coachVoice test guard).
- *   3. No exclamation mark.
- *   4. Every digit-sequence in aiText appears in allowedNumbersFor(obs).
+ *   3. Every digit-sequence in aiText appears in allowedNumbersFor(obs).
+ *   4. Contains at least one forward-directive cue (DIRECTIVE_CUE_RE) OR
+ *      a question mark. A description-only rephrase — even if every number
+ *      checks out — is rejected so the hero never reverts to the
+ *      wall-of-stats voice. A rhetorical question counts as a forward cue
+ *      (v3: warmer voice permits questions).
+ *
+ * v3 changes: exclamation marks are NO LONGER rejected. A PR line that
+ * lands with a "!" is human and earned. The deterministic pools use them
+ * sparingly (milestones only) and the prompt asks the model to do the same.
  */
 export function validatePhrasing(
   aiText: string | null | undefined,
@@ -170,13 +225,21 @@ export function validatePhrasing(
   if (trimmed.length === 0) return deterministicLine;
   if (trimmed.length > MAX_PHRASING_LEN) return deterministicLine;
   if (EMOJI_RE.test(trimmed)) return deterministicLine;
-  if (trimmed.includes('!')) return deterministicLine;
 
   const allowed = allowedNumbersFor(obs);
   const found = extractNumbers(trimmed);
   for (const n of found) {
     if (!allowed.has(n)) return deterministicLine;
   }
+
+  // Directive floor — last so a stripped-of-action rephrase still falls
+  // back to the (always read+directive) deterministic line. A question
+  // mark counts as a forward cue in v3 (rhetorical questions are a
+  // natural coaching tool the warmer voice permits).
+  if (!DIRECTIVE_CUE_RE.test(trimmed) && !trimmed.includes('?')) {
+    return deterministicLine;
+  }
+
   return trimmed;
 }
 
@@ -188,8 +251,11 @@ export function validatePhrasing(
  * refactor that adds a free-text channel here would have to update that
  * test, which is the speed-bump we want.
  */
-export function buildEdgePayload(observations: Observation[]): EdgePhrasePayload {
-  return {
+export function buildEdgePayload(
+  observations: Observation[],
+  userName?: string,
+): EdgePhrasePayload {
+  const payload: EdgePhrasePayload = {
     observations: observations.map(obs => ({
       factSig: obs.factSig,
       observationType: obs.type,
@@ -197,6 +263,10 @@ export function buildEdgePayload(observations: Observation[]): EdgePhrasePayload
       deterministicLine: phraseObservation(obs),
     })),
   };
+  if (userName && userName.trim().length > 0) {
+    payload.userName = userName.trim();
+  }
+  return payload;
 }
 
 /** Per-observation facts — numbers and the lift name only. NEVER free-text. */
@@ -222,10 +292,16 @@ function factsFor(obs: Observation): Record<string, string | number> {
       return { workoutType: obs.workoutType, exerciseCount: obs.exerciseCount };
     case 'rest_day':
       return {};
-    case 'plan_rationale':
+    case 'plan_rationale': {
       // split is an enum label from profiles.preferred_split — closed set,
-      // not free-text. Safe to send.
-      return { split: obs.split, trainingDays: obs.trainingDays };
+      // not free-text. Safe to send. goal/priority are also closed sets
+      // (enforced by the migration CHECK + onboarding UI) so they're safe
+      // to forward without sanitising as free-text.
+      const out: Record<string, string | number> = { split: obs.split, trainingDays: obs.trainingDays };
+      if (obs.goal) out.goal = obs.goal;
+      if (obs.priority) out.priority = obs.priority;
+      return out;
+    }
     case 'calibration':
       return {};
   }
@@ -235,6 +311,10 @@ function factsFor(obs: Observation): Record<string, string | number> {
 
 async function readCache(factSig: string): Promise<string | null> {
   try {
+    // CACHE_KEY_PREFIX carries COACH_VOICE_PROMPT_VERSION — a bump there
+    // immediately starts serving misses for every prior cached line. Old
+    // 'coachVoiceAI:' (un-versioned) and 'coachVoiceAI:v{N-1}:' keys are
+    // simply not looked up; they're inert until AsyncStorage prunes them.
     return await AsyncStorage.getItem(CACHE_KEY_PREFIX + factSig);
   } catch (e) {
     reportSilent(e, 'coachVoiceAI:readCache');
@@ -273,10 +353,13 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | { __timeou
  * Cache: a factSig with a cached, valid AI line is reused without calling
  * the edge function. If every observation in the batch is cached, no
  * network call happens.
+ *
+ * userName: optional — passed through to the edge function for light
+ * personalization. The prompt instructs the model to use it occasionally.
  */
 export async function phraseObservationsAI(
   observations: Observation[],
-  opts?: { timeoutMs?: number },
+  opts?: { timeoutMs?: number; userName?: string },
 ): Promise<Map<string, string>> {
   const result = new Map<string, string>();
   if (observations.length === 0) return result;
@@ -297,7 +380,7 @@ export async function phraseObservationsAI(
   if (uncached.length === 0) return result;
 
   // 2. Build the payload (the no-journal invariant is enforced here).
-  const payload = buildEdgePayload(uncached);
+  const payload = buildEdgePayload(uncached, opts?.userName);
 
   // 3. Network call — never throws to the caller.
   let phrasings: Record<string, string> = {};
@@ -343,6 +426,8 @@ export async function phraseObservationsAI(
  * Otherwise: rephrase, validate, persist via updateCoachMessageTextByFactSig.
  * Errors are swallowed; the deterministic line is what's on the card by
  * the time this runs.
+ *
+ * userName: optional — passed to the rephraser for light personalization.
  */
 export async function runCoachVoiceUpgrade(
   userId: string,
@@ -350,11 +435,12 @@ export async function runCoachVoiceUpgrade(
   // Lazy import to avoid a circular dependency between coachVoiceAI →
   // coachMessages → coachVoiceAI in test harnesses.
   updateFn: (userId: string, factSig: string, newText: string) => Promise<void>,
+  userName?: string,
 ): Promise<void> {
   if (!COACH_AI_VOICE) return;
   if (observations.length === 0) return;
   try {
-    const phrased = await phraseObservationsAI(observations);
+    const phrased = await phraseObservationsAI(observations, { userName });
     for (const obs of observations) {
       const text = phrased.get(obs.factSig);
       if (!text) continue;

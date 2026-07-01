@@ -12,7 +12,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../context/ThemeContext';
 import { TabScrollContext } from '../context/TabScrollContext';
-import { typography, layout } from '../theme';
+import { typography, layout, elevation } from '../theme';
 
 import HomeScreen from '../../app/(tabs)/home';
 import ProgressScreen from '../../app/(tabs)/progress';
@@ -32,6 +32,11 @@ export default function TabLayout() {
 
   const [activeTopTab, setActiveTopTab] = useState(0);
   const [activeSubTab, setActiveSubTab] = useState(0);
+  // Track which sub-tabs have been visited so we only mount a screen when
+  // it's first scrolled to. This prevents all 4 sub-screens from firing
+  // their network loads on initial app open. Once visited, a tab stays
+  // mounted so the pager scroll position is preserved.
+  const [mountedSubTabs, setMountedSubTabs] = useState<Set<number>>(new Set([0]));
 
   const scrollViewRef = useRef<ScrollView>(null);
 
@@ -50,6 +55,7 @@ export default function TabLayout() {
   const handleSubTabPress = useCallback((index: number) => {
     if (index < 0 || index >= WORKOUT_SUB_TABS.length) return;
     setActiveSubTab(index);
+    setMountedSubTabs(prev => prev.has(index) ? prev : new Set(prev).add(index));
     scrollViewRef.current?.scrollTo({
       x: index * SCREEN_WIDTH,
       animated: true,
@@ -65,35 +71,34 @@ export default function TabLayout() {
     const index = Math.round(offsetX / SCREEN_WIDTH);
     if (index >= 0 && index < WORKOUT_SUB_TABS.length && index !== activeSubTab) {
       setActiveSubTab(index);
+      setMountedSubTabs(prev => prev.has(index) ? prev : new Set(prev).add(index));
     }
   };
 
   const renderWorkoutContent = () => (
-    <>
-      <ScrollView
-        ref={scrollViewRef}
-        horizontal
-        pagingEnabled
-        showsHorizontalScrollIndicator={false}
-        scrollEventThrottle={16}
-        onScroll={handleScroll}
-        style={styles.subScrollView}
-        contentContainerStyle={{ width: SCREEN_WIDTH * WORKOUT_SUB_TABS.length }}
-      >
-        <View key="home" style={{ width: SCREEN_WIDTH }}>
-          <HomeScreen />
-        </View>
-        <View key="progress" style={{ width: SCREEN_WIDTH }}>
-          <ProgressScreen />
-        </View>
-        <View key="history" style={{ width: SCREEN_WIDTH }}>
-          <HistoryScreen />
-        </View>
-        <View key="coach" style={{ width: SCREEN_WIDTH }}>
-          <CoachScreen />
-        </View>
-      </ScrollView>
-    </>
+    <ScrollView
+      ref={scrollViewRef}
+      horizontal
+      pagingEnabled
+      showsHorizontalScrollIndicator={false}
+      scrollEventThrottle={16}
+      onScroll={handleScroll}
+      style={styles.subScrollView}
+      contentContainerStyle={{ width: SCREEN_WIDTH * WORKOUT_SUB_TABS.length }}
+    >
+      <View key="home" style={{ width: SCREEN_WIDTH }}>
+        {mountedSubTabs.has(0) ? <HomeScreen /> : null}
+      </View>
+      <View key="progress" style={{ width: SCREEN_WIDTH }}>
+        {mountedSubTabs.has(1) ? <ProgressScreen /> : null}
+      </View>
+      <View key="history" style={{ width: SCREEN_WIDTH }}>
+        {mountedSubTabs.has(2) ? <HistoryScreen /> : null}
+      </View>
+      <View key="coach" style={{ width: SCREEN_WIDTH }}>
+        {mountedSubTabs.has(3) ? <CoachScreen /> : null}
+      </View>
+    </ScrollView>
   );
 
   const renderJournalContent = () => <JournalScreen />;
@@ -150,11 +155,8 @@ export default function TabLayout() {
                       styles.pillItem,
                       isActive && {
                         backgroundColor: colors.surfaceElevated,
-                        shadowColor: '#000',
-                        shadowOpacity: 0.25,
-                        shadowRadius: 4,
-                        shadowOffset: { width: 0, height: 1 },
-                        elevation: 2,
+                        shadowColor: colors.shadowColor,
+                        ...elevation.subtle,
                       },
                     ]}
                     onPress={() => handleSubTabPress(index)}
@@ -201,7 +203,7 @@ const styles = StyleSheet.create({
   },
   topTabText: {
     fontFamily: 'Syne_700Bold',
-    fontSize: 12,
+    fontSize: typography.size.s12,
     letterSpacing: 1,
   },
   topTabUnderline: {
@@ -221,7 +223,7 @@ const styles = StyleSheet.create({
   },
   pillTrack: {
     flexDirection: 'row',
-    borderRadius: 16,
+    borderRadius: layout.radii.r16,
     padding: 6,
     gap: 4,
   },
@@ -229,13 +231,13 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 10,
     paddingHorizontal: 6,
-    borderRadius: 12,
+    borderRadius: layout.radii.r12,
     alignItems: 'center',
     justifyContent: 'center',
   },
   pillText: {
     fontFamily: typography.family.bodyMedium,
-    fontSize: 12,
+    fontSize: typography.size.s12,
     letterSpacing: 0,
     // Keep every sub-tab label on a single line ("Dashboard" was wrapping to
     // "Dashboar\nd"); adjustsFontSizeToFit shrinks slightly only if needed.

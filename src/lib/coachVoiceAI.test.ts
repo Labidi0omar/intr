@@ -46,6 +46,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   allowedNumbersFor,
   buildEdgePayload,
+  COACH_VOICE_PROMPT_VERSION,
   phraseObservationsAI,
   runCoachVoiceUpgrade,
   validatePhrasing,
@@ -187,8 +188,8 @@ describe('validatePhrasing', () => {
   const obs = upObs('Bench', 80, 85, 3);
   const det = phraseObservation(obs);
 
-  it('accepts a clean rephrase that uses only allowed numbers', () => {
-    const ai = 'Bench inching up — 80 to 85 kg over 3 sessions.';
+  it('accepts a clean rephrase that uses only allowed numbers AND carries a directive', () => {
+    const ai = 'Bench up 80 to 85 over 3 sessions. Hold the form today.';
     expect(validatePhrasing(ai, obs, det)).toBe(ai);
   });
 
@@ -208,14 +209,66 @@ describe('validatePhrasing', () => {
     expect(validatePhrasing(ai, obs, det)).toBe(det);
   });
 
-  it('rejects exclamation marks (no cheerleading)', () => {
-    const ai = 'Bench up 80 to 85 over 3 sessions!';
+  it('accepts exclamation marks on milestone observations (v3: warmer voice)', () => {
+    // v3: exclamation is allowed — a PR line that lands with a "!" is
+    // human and earned. The deterministic pools use them sparingly
+    // (milestones only) and the prompt asks the model to do the same.
+    const prObs: Observation = {
+      type: 'session_pr', id: 'session_pr:Bench', factSig: 'pr-100',
+      salience: 0.62, eventDate: TODAY, lift: 'Bench', newKg: 100, prevKg: 95,
+    };
+    const prDet = phraseObservation(prObs);
+    const ai = 'Bench PR at 100 kg — that\'s a real one! Bank it; don\'t chase another today.';
+    expect(validatePhrasing(ai, prObs, prDet)).toBe(ai);
+  });
+
+  it('rejects > 130 chars (hero length cap — single source of truth with coachVoice.MAX_HERO_LINE_LEN)', () => {
+    // 131 'x's with no digits → trips ONLY the length rule; if the cap
+    // ever weakens, this fails.
+    const ai = 'Bench '.padEnd(131, 'x');
+    expect(ai.length).toBe(131);
     expect(validatePhrasing(ai, obs, det)).toBe(det);
   });
 
-  it('rejects > 160 chars', () => {
-    const ai = 'Bench '.padEnd(170, 'x'); // no numbers but very long
+  it('accepts a 120-char rephrase (well under the 130-char cap)', () => {
+    const ai = 'Bench inching to 85 kg over three sessions. Hold the form today; ride the run before pushing for more.';
+    expect(ai.length).toBeLessThanOrEqual(130);
+    expect(validatePhrasing(ai, obs, det)).toBe(ai);
+  });
+
+  // ── Directive cue (new): description-only rephrases must fall back ──
+  // Bug: an AI line like "You hit 30 of 30 sets in the sweet spot." reads
+  // backward — a stat, no "what to do today". The validator now requires
+  // an imperative/temporal cue so the hero never reverts to that voice.
+
+  it('rejects a description-only rephrase that drops the directive beat', () => {
+    // Every number checks out (80, 85, 3 are allowed), no emoji, no bang,
+    // under length — but no directive verb / "today" / "next time" anchor.
+    const ai = 'Bench is moving — 80 to 85 over 3 sessions.';
     expect(validatePhrasing(ai, obs, det)).toBe(det);
+  });
+
+  it('rejects a stat-shaped rephrase even when grammatically clean', () => {
+    const ai = 'Bench up from 80 to 85 across 3 sessions.';
+    expect(validatePhrasing(ai, obs, det)).toBe(det);
+  });
+
+  it('accepts a directive-bearing rephrase that uses imperative cues', () => {
+    const ai = 'Bench up to 85. Keep the form; push for one more rep next time.';
+    // "keep" + "push" + "next time" all fire the cue.
+    expect(validatePhrasing(ai, obs, det)).toBe(ai);
+  });
+
+  it('accepts a rephrase whose directive is a "don\'t" / "today" anchor', () => {
+    const ai = 'Bench at 85 today — don\'t chase another, ride the run.';
+    expect(validatePhrasing(ai, obs, det)).toBe(ai);
+  });
+
+  it('accepts a rhetorical question as a forward cue (v3: warmer voice)', () => {
+    // A question mark counts as a directive cue in v3. "Ready to chase it?"
+    // has no imperative verb but carries a forward beat.
+    const ai = 'Bench up to 85. Ready to chase it?';
+    expect(validatePhrasing(ai, obs, det)).toBe(ai);
   });
 
   it('rejects empty / whitespace / null / non-string', () => {
@@ -229,7 +282,8 @@ describe('validatePhrasing', () => {
   it('accepts a no-number rephrase (the digit guard is permissive when there are no digits)', () => {
     const ezObs = effortObs('low', 0.2);
     const det2 = phraseObservation(ezObs);
-    const ai = 'Loads are too easy — climb.';
+    // Includes "push" — a directive cue. No digits, no emoji, no bang.
+    const ai = 'Loads are too easy — push closer to failure.';
     expect(validatePhrasing(ai, ezObs, det2)).toBe(ai);
   });
 });
@@ -329,7 +383,7 @@ describe('phraseObservationsAI', () => {
 
   it('accepts and caches a clean AI line; cache hit skips the next invoke', async () => {
     const obs = upObs('Bench', 80, 85, 3);
-    const clean = 'Bench inching up — 80 to 85 kg over 3 sessions.';
+    const clean = 'Bench up to 85 over 3 sessions. Hold the form today.';
     mockInvoke.mockResolvedValue({
       data: { phrasings: { [obs.factSig]: clean } },
       error: null,
@@ -349,11 +403,13 @@ describe('phraseObservationsAI', () => {
   it('only batches uncached observations to the function', async () => {
     const cachedObs = upObs('Bench', 80, 85, 3);
     const freshObs = prObs('Squat', 100, 95);
-    const cachedLine = 'Bench inching up — 80 to 85 kg over 3 sessions.';
-    asyncStore[`coachVoiceAI:${cachedObs.factSig}`] = cachedLine;
+    const cachedLine = 'Bench up to 85 over 3 sessions. Hold form today.';
+    // Cache key carries the prompt version — write to the SAME shape the
+    // production reader looks up.
+    asyncStore[`coachVoiceAI:v${COACH_VOICE_PROMPT_VERSION}:${cachedObs.factSig}`] = cachedLine;
 
     mockInvoke.mockResolvedValue({
-      data: { phrasings: { [freshObs.factSig]: 'Squat PR: 100 kg, was 95.' } },
+      data: { phrasings: { [freshObs.factSig]: 'Squat PR — 100 kg past 95. Take the win today.' } },
       error: null,
     });
 
@@ -372,6 +428,58 @@ describe('phraseObservationsAI', () => {
       error: null,
     });
     await phraseObservationsAI([obs]);
+    // Versioned key — the rejection path must not write under it.
+    expect(asyncStore[`coachVoiceAI:v${COACH_VOICE_PROMPT_VERSION}:${obs.factSig}`]).toBeUndefined();
+  });
+
+  // ── Versioned cache: prompt/validator bumps invalidate old entries ──
+  // Bug regression: a stale 'coachVoiceAI:<factSig>' entry written under
+  // v1's looser validator was serving a description-only line on the
+  // hero even after the validator tightened. Versioning the key forces
+  // a re-fetch through the current validator on every contract change.
+
+  it('IGNORES a legacy unversioned cache key (the v1 bug regression)', async () => {
+    const obs = upObs('Bench', 80, 85, 3);
+    // Pre-version stale entry — must NOT be served.
+    asyncStore[`coachVoiceAI:${obs.factSig}`] = 'You hit 30 of 30 sets in the sweet spot.';
+
+    mockInvoke.mockResolvedValue({
+      data: { phrasings: { [obs.factSig]: 'Bench up to 85. Hold form today.' } },
+      error: null,
+    });
+
+    const map = await phraseObservationsAI([obs]);
+    // Function WAS invoked (cache miss); the AI win is what surfaces.
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(map.get(obs.factSig)).toBe('Bench up to 85. Hold form today.');
+  });
+
+  it('IGNORES a cache key from an older COACH_VOICE_PROMPT_VERSION', async () => {
+    const obs = upObs('Bench', 80, 85, 3);
+    // Earlier version's cache entry — also ignored.
+    const olderVersion = COACH_VOICE_PROMPT_VERSION - 1;
+    asyncStore[`coachVoiceAI:v${olderVersion}:${obs.factSig}`] = 'Stale line from old prompt.';
+
+    mockInvoke.mockResolvedValue({
+      data: { phrasings: { [obs.factSig]: 'Bench up to 85. Push next time.' } },
+      error: null,
+    });
+
+    const map = await phraseObservationsAI([obs]);
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(map.get(obs.factSig)).toBe('Bench up to 85. Push next time.');
+  });
+
+  it('writes new entries under the current version key', async () => {
+    const obs = upObs('Bench', 80, 85, 3);
+    const clean = 'Bench up to 85. Hold the form today.';
+    mockInvoke.mockResolvedValue({
+      data: { phrasings: { [obs.factSig]: clean } },
+      error: null,
+    });
+    await phraseObservationsAI([obs]);
+    expect(asyncStore[`coachVoiceAI:v${COACH_VOICE_PROMPT_VERSION}:${obs.factSig}`]).toBe(clean);
+    // And NOT under the legacy un-versioned key.
     expect(asyncStore[`coachVoiceAI:${obs.factSig}`]).toBeUndefined();
   });
 });
@@ -397,11 +505,12 @@ describe('runCoachVoiceUpgrade', () => {
   it('calls updateFn only when the AI line differs from deterministic', async () => {
     const obs1 = upObs('Bench', 80, 85, 3); // AI wins
     const obs2 = prObs('Squat', 100, 95);    // AI rejected → no update
+    const wins = 'Bench up to 85 over 3 sessions. Hold the form today.';
     mockInvoke.mockResolvedValue({
       data: {
         phrasings: {
-          [obs1.factSig]: 'Bench inching up — 80 to 85 kg over 3 sessions.',
-          [obs2.factSig]: 'Squat PR! 100 kg.', // exclamation → rejected
+          [obs1.factSig]: wins,
+          [obs2.factSig]: 'Squat PR at 999 kg!', // invented number 999 → rejected
         },
       },
       error: null,
@@ -411,13 +520,13 @@ describe('runCoachVoiceUpgrade', () => {
     await runCoachVoiceUpgrade('u', [obs1, obs2], updateFn);
 
     expect(updateFn).toHaveBeenCalledTimes(1);
-    expect(updateFn).toHaveBeenCalledWith('u', obs1.factSig, 'Bench inching up — 80 to 85 kg over 3 sessions.');
+    expect(updateFn).toHaveBeenCalledWith('u', obs1.factSig, wins);
   });
 
   it('swallows updateFn rejections — never throws to the caller', async () => {
     const obs = upObs();
     mockInvoke.mockResolvedValue({
-      data: { phrasings: { [obs.factSig]: 'Bench inching up — 80 to 85 kg over 3 sessions.' } },
+      data: { phrasings: { [obs.factSig]: 'Bench up to 85 today. Hold the form.' } },
       error: null,
     });
     const updateFn = jest.fn().mockRejectedValue(new Error('disk full'));

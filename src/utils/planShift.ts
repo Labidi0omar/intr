@@ -60,6 +60,54 @@ export function resolvePlanDayForDate<T extends { day?: string | null; date?: st
   return null;
 }
 
+/** Tri-valued read of "what kind of day is today." Used to fan out one
+ *  source of truth across the dashboard's three rest-day decisions (the
+ *  TODAY card, the coach hero, the observation pipeline) so they can
+ *  never disagree on screen.
+ *
+ *  Core rule: absence of a resolved plan day is UNKNOWN, not REST. Only
+ *  positively-resolved rest/recovery designation produces 'rest'. The
+ *  coach hero treats 'unknown' as "suppress" — it never asserts "Rest
+ *  today" from a transient load race.
+ */
+export type TodayKind = 'training' | 'rest' | 'unknown';
+
+/**
+ * Derive today's kind from the same resolved plan the TODAY card renders
+ * from. Pure; null-safe.
+ *
+ *   'unknown' — planDays not loaded (null/empty), or weekStart missing.
+ *   'rest'    — planDays IS loaded AND today positively has no training
+ *               row (no match in the array) OR matches a row whose
+ *               workoutType is empty / 'Rest' / 'Recovery*'.
+ *   'training' — today matches a row whose workoutType names a real
+ *               training session (anything else).
+ */
+export function deriveTodayKind(
+  planDays:
+    | readonly { day?: string | null; date?: string | null; workoutType?: string | null }[]
+    | null
+    | undefined,
+  weekStartIso: string | null | undefined,
+  todayIso: string,
+): TodayKind {
+  // Plan not loaded yet → unknown. This is THE bug fix: a transient null
+  // from an in-flight fetch must NEVER read as rest day.
+  if (!planDays || planDays.length === 0) return 'unknown';
+  if (!weekStartIso) return 'unknown';
+
+  const todayPlan = resolvePlanDayForDate(planDays, weekStartIso, todayIso);
+  // PlanDays loaded but nothing maps to today → genuine rest day (the
+  // plan's gaps are rest by construction).
+  if (!todayPlan) return 'rest';
+
+  const wt = (todayPlan.workoutType ?? '').trim();
+  if (!wt) return 'rest';
+  if (wt === 'Rest') return 'rest';
+  if (wt.startsWith('Recovery')) return 'rest';
+  return 'training';
+}
+
 /**
  * Set of ISO dates (YYYY-MM-DD) the plan marks as actual training days
  * within [weekStart, weekStart+6]. Excludes Rest and Recovery-prefixed

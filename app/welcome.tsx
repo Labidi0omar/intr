@@ -119,6 +119,9 @@ const makeStyles = (colors: any) => StyleSheet.create({
   actions: {
     width: '100%',
   },
+  // Google brand colors (#FFFFFF / #E0E0E0 / #1A73E8 / #1F1F1F) are
+  // intentional and kept as literals — they match Google's sign-in
+  // button spec and must not drift with the app theme.
   googleBtn: {
     height: 52,
     borderRadius: layout.cardRadius,
@@ -131,7 +134,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   googleGlyphWrap: {
     width: 22,
     height: 22,
-    borderRadius: 11,
+    borderRadius: layout.radii.r11,
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
@@ -140,7 +143,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   googleGlyph: {
     fontFamily: typography.family.heading,
-    fontSize: 13,
+    fontSize: typography.size.s13,
     color: '#1A73E8',
     lineHeight: 16,
   },
@@ -170,7 +173,7 @@ const makeStyles = (colors: any) => StyleSheet.create({
   },
   dividerText: {
     fontFamily: typography.family.body,
-    fontSize: 10,
+    fontSize: typography.size.s10,
     letterSpacing: 2,
     color: colors.textMuted,
     paddingHorizontal: layout.spacing.md,

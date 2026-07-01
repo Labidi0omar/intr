@@ -1,4 +1,4 @@
-import { prescribeLoad, wasFollowed, hitTargetZone } from './loadPrescription';
+import { prescribeLoad, wasFollowed, hitTargetZone, applyStallNudge, STALL_WEEKS } from './loadPrescription';
 
 describe('prescribeLoad', () => {
   // ── No-history / null guards ────────────────────────────────────────
@@ -176,6 +176,301 @@ describe('wasFollowed', () => {
   });
   it('2.6kg apart (logged below) → override', () => {
     expect(wasFollowed(100, 97.4)).toBe(false);
+  });
+});
+
+describe('applyStallNudge', () => {
+  // The base shape: a "would hold" prescription — RIR 1 (hard but clean),
+  // normal energy, cause === 'rir'. That's the slot the nudge is allowed
+  // to operate in; the helper builds it so each test focuses on the
+  // history + energy + lastRir variations.
+  const baseHold = prescribeLoad({
+    lastWeightKg: 80,
+    lastRir: 1,
+    energyScore: 3,
+    isCompound: true,
+  });
+
+  /** 3 weekly sessions, all at 80 kg, anchored so the earliest is N weeks
+   *  before today. Caller chooses today. */
+  function flatThreeWeekHistory(todayIso: string, kg = 80) {
+    // Earliest session is 21 days (3 weeks) before today; one session per
+    // week is enough — runLength = 3, weeks = 3.
+    return [
+      { topKg: kg, date: shiftIso(todayIso, -21) },
+      { topKg: kg, date: shiftIso(todayIso, -14) },
+      { topKg: kg, date: shiftIso(todayIso, -7) },
+    ];
+  }
+
+  function shiftIso(iso: string, days: number): string {
+    const [y, m, d] = iso.split('-').map(Number);
+    const dt = new Date(y, m - 1, d + days);
+    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+  }
+
+  it('flat ≥ 3 weeks + clean RIR + normal energy → bumps weight + cause time_to_progress', () => {
+    const today = '2026-06-30';
+    const out = applyStallNudge({
+      base: baseHold,
+      liftHistory: flatThreeWeekHistory(today),
+      lastRir: 1,
+      energyScore: 3,
+      isCompound: true,
+      todayIso: today,
+    });
+    // Compound +5% step: 80 → 84 → rounds to 85.
+    expect(out.rationale).toBe('progress');
+    expect(out.cause).toBe('time_to_progress');
+    expect(out.suggestedWeightKg).toBe(85);
+    expect(out.stallWeeks).toBeGreaterThanOrEqual(STALL_WEEKS);
+  });
+
+  it('flat ≥ 3 weeks + high energy (4) → still bumps (only low energy protects)', () => {
+    const today = '2026-06-30';
+    const out = applyStallNudge({
+      base: baseHold,
+      liftHistory: flatThreeWeekHistory(today),
+      lastRir: 1,
+      energyScore: 4,
+      isCompound: true,
+      todayIso: today,
+    });
+    expect(out.cause).toBe('time_to_progress');
+  });
+
+  it('flat ≥ 3 weeks but LOW energy (≤ 2) → no bump (energy still suppresses)', () => {
+    const today = '2026-06-30';
+    const out = applyStallNudge({
+      base: baseHold,
+      liftHistory: flatThreeWeekHistory(today),
+      lastRir: 1,
+      energyScore: 2,
+      isCompound: true,
+      todayIso: today,
+    });
+    expect(out).toBe(baseHold);
+  });
+
+  it('flat ≥ 3 weeks but last session was FAILURE → no bump', () => {
+    // A failure backoff is the engine's strongest signal; the nudge must
+    // never override it. Confirm the wrapper passes the failure rx through
+    // untouched even on a long stall.
+    const today = '2026-06-30';
+    const failureRx = prescribeLoad({
+      lastWeightKg: 80, lastRir: 0, energyScore: 3, isCompound: true,
+    });
+    expect(failureRx.cause).toBe('failure');
+    const out = applyStallNudge({
+      base: failureRx,
+      liftHistory: flatThreeWeekHistory(today),
+      lastRir: 0,
+      energyScore: 3,
+      isCompound: true,
+      todayIso: today,
+    });
+    expect(out).toBe(failureRx);
+  });
+
+  it('flat but only 2 weeks → no bump (under STALL_WEEKS threshold)', () => {
+    const today = '2026-06-30';
+    const out = applyStallNudge({
+      base: baseHold,
+      liftHistory: [
+        { topKg: 80, date: shiftIso(today, -14) },
+        { topKg: 80, date: shiftIso(today, -7) },
+      ],
+      lastRir: 1,
+      energyScore: 3,
+      isCompound: true,
+      todayIso: today,
+    });
+    expect(out).toBe(baseHold);
+  });
+
+  it('a single session at the current top → no bump (need ≥ 2 to claim a stall)', () => {
+    // Long absence then one session today: not a stall, it's a return.
+    // The "actually trained in that window, not just absent" guard.
+    const today = '2026-06-30';
+    const out = applyStallNudge({
+      base: baseHold,
+      liftHistory: [{ topKg: 80, date: today }],
+      lastRir: 1,
+      energyScore: 3,
+      isCompound: true,
+      todayIso: today,
+    });
+    expect(out).toBe(baseHold);
+  });
+
+  it('long-ago session at the same weight with an intervening higher session → no bump', () => {
+    // History: 80 → 85 → 80 → 80 → 80. The latest run is 3×80, but the
+    // 85 in the middle broke the stall; only the post-85 sessions count.
+    // Earliest session in the run is 14 days ago → 2 weeks → under threshold.
+    const today = '2026-06-30';
+    const out = applyStallNudge({
+      base: baseHold,
+      liftHistory: [
+        { topKg: 80, date: shiftIso(today, -35) },
+        { topKg: 85, date: shiftIso(today, -28) }, // breaks the stall
+        { topKg: 80, date: shiftIso(today, -14) },
+        { topKg: 80, date: shiftIso(today, -7) },
+        { topKg: 80, date: today },
+      ],
+      lastRir: 1,
+      energyScore: 3,
+      isCompound: true,
+      todayIso: today,
+    });
+    expect(out).toBe(baseHold);
+  });
+
+  it('clean RIR 2 (target zone) also earns the nudge once the stall is long enough', () => {
+    // RIR 2 normally produces a small progression on its own; but if for
+    // whatever reason the engine emitted a hold-rir (e.g. plate-cap on
+    // a tiny lift), a true 3-week stall on a clean RIR-2 set still earns
+    // the nudge. Construct the base manually to exercise that path.
+    const today = '2026-06-30';
+    const baseFakedHold: ReturnType<typeof prescribeLoad> = {
+      suggestedWeightKg: 80,
+      deltaPct: 0,
+      rationale: 'hold',
+      cause: 'rir',
+    };
+    const out = applyStallNudge({
+      base: baseFakedHold,
+      liftHistory: flatThreeWeekHistory(today),
+      lastRir: 2,
+      energyScore: 3,
+      isCompound: true,
+      todayIso: today,
+    });
+    expect(out.cause).toBe('time_to_progress');
+  });
+
+  it('null lastRir → no bump (no clean signal to credit)', () => {
+    const today = '2026-06-30';
+    const out = applyStallNudge({
+      base: baseHold,
+      liftHistory: flatThreeWeekHistory(today),
+      lastRir: null,
+      energyScore: 3,
+      isCompound: true,
+      todayIso: today,
+    });
+    expect(out).toBe(baseHold);
+  });
+
+  it('beginner halves the bump (same rule as a real progression)', () => {
+    // Compound beginner step: 0.05 × 0.5 = 0.025 → 80 × 1.025 = 82 → 82.5.
+    const today = '2026-06-30';
+    const out = applyStallNudge({
+      base: baseHold,
+      liftHistory: flatThreeWeekHistory(today),
+      lastRir: 1,
+      energyScore: 3,
+      isCompound: true,
+      fitnessLevel: 'beginner',
+      todayIso: today,
+    });
+    expect(out.cause).toBe('time_to_progress');
+    expect(out.suggestedWeightKg).toBe(82.5);
+  });
+
+  it('isolation: a sub-plate bump collapses to no-op (no contradiction with hero)', () => {
+    // 20 × 1.025 = 20.5 → rounds to 20 → no movement. The guard inside
+    // applyStallNudge returns the base unchanged in that case, so the
+    // hero never gets "Same as last" next to "time to add a little."
+    const today = '2026-06-30';
+    const baseIso = { ...baseHold, suggestedWeightKg: 20 };
+    const out = applyStallNudge({
+      base: baseIso,
+      liftHistory: [
+        { topKg: 20, date: shiftIso(today, -21) },
+        { topKg: 20, date: shiftIso(today, -14) },
+        { topKg: 20, date: shiftIso(today, -7) },
+      ],
+      lastRir: 1,
+      energyScore: 3,
+      isCompound: false,
+      todayIso: today,
+    });
+    expect(out).toBe(baseIso);
+  });
+
+  it('isolation: a kg that DOES move under +2.5% earns the nudge', () => {
+    // 50 × 1.025 = 51.25 → rounds to 50 in Math.round(51.25/2.5)*2.5
+    // = round(20.5)*2.5 = 20*2.5 = 50 (banker's rounding pulls to 20).
+    // Use a kg where the +2.5% bump crosses the plate cleanly: 60 →
+    // 60 × 1.025 = 61.5 → round(24.6)*2.5 = 25*2.5 = 62.5.
+    const today = '2026-06-30';
+    const baseIso = { ...baseHold, suggestedWeightKg: 60 };
+    const out = applyStallNudge({
+      base: baseIso,
+      liftHistory: [
+        { topKg: 60, date: shiftIso(today, -21) },
+        { topKg: 60, date: shiftIso(today, -14) },
+        { topKg: 60, date: shiftIso(today, -7) },
+      ],
+      lastRir: 1,
+      energyScore: 3,
+      isCompound: false,
+      todayIso: today,
+    });
+    expect(out.cause).toBe('time_to_progress');
+    expect(out.suggestedWeightKg).toBe(62.5);
+  });
+
+  it('non-hold base passes through untouched (never overrides progress/backoff)', () => {
+    const today = '2026-06-30';
+    const progressRx = prescribeLoad({
+      lastWeightKg: 80, lastRir: 3, energyScore: 3, isCompound: true,
+    });
+    const out = applyStallNudge({
+      base: progressRx,
+      liftHistory: flatThreeWeekHistory(today),
+      lastRir: 3,
+      energyScore: 3,
+      isCompound: true,
+      todayIso: today,
+    });
+    expect(out).toBe(progressRx);
+  });
+
+  it('low-energy-driven hold passes through untouched (cause !== rir)', () => {
+    // lastRir 3 + energy 2 → engine emits hold/low_energy. The nudge
+    // must not climb on top of a low-energy day.
+    const today = '2026-06-30';
+    const lowEnergyHold = prescribeLoad({
+      lastWeightKg: 80, lastRir: 3, energyScore: 2, isCompound: true,
+    });
+    expect(lowEnergyHold.cause).toBe('low_energy');
+    const out = applyStallNudge({
+      base: lowEnergyHold,
+      liftHistory: flatThreeWeekHistory(today),
+      lastRir: 3,
+      energyScore: 2,
+      isCompound: true,
+      todayIso: today,
+    });
+    expect(out).toBe(lowEnergyHold);
+  });
+
+  it('hero delta and stall reason agree: weight actually moves, deltaPct > 0', () => {
+    // The whole point of the wrapper: a "time_to_progress" rx has a real
+    // positive delta the presenter can put next to "time to add a little"
+    // without the old "Same as last" contradiction.
+    const today = '2026-06-30';
+    const out = applyStallNudge({
+      base: baseHold,
+      liftHistory: flatThreeWeekHistory(today),
+      lastRir: 1,
+      energyScore: 3,
+      isCompound: true,
+      todayIso: today,
+    });
+    expect(out.suggestedWeightKg).toBeGreaterThan(80);
+    expect(out.deltaPct).toBeGreaterThan(0);
   });
 });
 

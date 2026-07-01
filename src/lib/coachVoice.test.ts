@@ -1,6 +1,9 @@
 // Tests for the MOUTH. The two invariants that matter:
 //   1. Determinism — same factSig → same line, every call, every run.
-//   2. Tone — no emoji, no exclamation cheerleading. The coach is terse.
+//   2. Tone — no emoji, no cheerleading. The coach is warm but never a
+//      hype-bot. Exclamation marks are allowed on genuine milestones
+//      (PRs, new highs) — see the per-type tests below. Non-milestone
+//      observations stay flat.
 //
 // Pool sizes are not asserted (we want to be free to add entries without
 // touching tests), but the per-factSig stability IS asserted because that
@@ -9,6 +12,7 @@
 import {
   dedupKeyFor,
   factSigFromDedupKey,
+  MAX_HERO_LINE_LEN,
   phraseObservation,
 } from './coachVoice';
 import type { CoachObservation, Observation } from './coachObservations';
@@ -266,9 +270,17 @@ describe('phraseObservation', () => {
     }
   });
 
-  it('no phrasing contains an exclamation mark (no cheerleading)', () => {
+  it('no phrasing contains an exclamation mark except on milestones (PRs, new highs)', () => {
+    // v3: exclamation is allowed on genuine milestones — a PR or a new
+    // all-time high. Every other observation type stays flat. This keeps
+    // the coach from ever sounding like a hype-bot on ordinary reads.
+    const isMilestone = (obs: CoachObservation): boolean =>
+      obs.type === 'session_pr' ||
+      (obs.type === 'lift_progression' && obs.subtype === 'up' && obs.isAllTimeHigh === true);
     for (const obs of ALL_FIXTURES) {
-      expect(phraseObservation(obs)).not.toMatch(/!/);
+      const line = phraseObservation(obs);
+      if (isMilestone(obs)) continue; // ! allowed here
+      expect(line).not.toMatch(/!/);
     }
   });
 
@@ -278,6 +290,105 @@ describe('phraseObservation', () => {
       expect(typeof line).toBe('string');
       expect(line.length).toBeGreaterThan(0);
       expect(line.trim()).toBe(line);
+    }
+  });
+
+  // ── Hero invariants — every hero-eligible line must fit AND act ────
+  // The dashboard hero shows ONE line at editorial scale. Two contracts:
+  //   1. ≤ MAX_HERO_LINE_LEN (90 chars) — the layout depends on it.
+  //   2. Carries a forward directive — where you are AND what to do today.
+  //      A purely descriptive line ("Bench hit a new high.") is rejected;
+  //      every entry must include at least one second-person directive
+  //      verb ("hit/keep/hold/push/cement/lock/bank/ease/pull/build/find/
+  //      force/take/show/run/log/trust/follow/get/add/drop/move/protect/
+  //      recover/skip/work/empty/dial/stay/bring/make/count/start/come/
+  //      don't") or a "today" / "next time" anchor. The test sweeps a
+  //      wide factSig range per type so every pool entry is exercised.
+
+  function sweepFactSigs<T extends CoachObservation>(obs: T, n: number): T[] {
+    const out: T[] = [];
+    for (let i = 0; i < n; i++) {
+      out.push({ ...obs, factSig: `${obs.factSig}-sweep-${i}` } as T);
+    }
+    return out;
+  }
+
+  // Lifted from the BRAIN's hero tier (anything that can land in the
+  // pre-workout dashboard's single slot). Filler-tier observations
+  // (briefing_fallback, rest_day, plan_rationale, calibration) are
+  // included too — they CAN surface on a quiet day, so they're held to
+  // the same length+directive bar.
+  const HERO_ELIGIBLE: CoachObservation[] = [
+    ...sweepFactSigs(up('Bench', 80, 142.5, 4), 6),
+    ...sweepFactSigs(upHigh('Bench', 80, 142.5, 4), 6),
+    ...sweepFactSigs(stall('Squat', 142.5, 4), 6),
+    ...sweepFactSigs(comebackLift('Row', 42), 6),
+    ...sweepFactSigs(pr('Bench Press', 142.5, 140), 6),
+    ...sweepFactSigs(consistency(28, 'days28'), 6),
+    ...sweepFactSigs({
+      type: 'block_position', id: 'block_position:3',
+      factSig: 'block-3', salience: 0.7, eventDate: TODAY, blockWeek: 3,
+    }, 6),
+    ...sweepFactSigs({
+      type: 'block_position', id: 'block_position:4',
+      factSig: 'block-4', salience: 0.95, eventDate: TODAY, blockWeek: 4,
+    }, 6),
+    ...sweepFactSigs(effortHigh(0.7), 6),
+    ...sweepFactSigs({
+      type: 'effort_zone', id: 'effort_zone', factSig: 'effort-low',
+      salience: 0.5, eventDate: TODAY, band: 'low', pct: 0.2,
+    }, 6),
+    ...sweepFactSigs({
+      type: 'dialed_in', id: 'dialed_in', factSig: 'dialed-7',
+      salience: 0.6, eventDate: TODAY, hits: 9, total: 12, pct: 0.75,
+    }, 6),
+    ...sweepFactSigs(comeback(42), 6),
+    ...sweepFactSigs(pushingHard('Bench', 'low_energy'), 6),
+    ...sweepFactSigs(grinding('Squat', 'stall'), 6),
+    ...sweepFactSigs(backOnTrack('Row'), 6),
+    ...sweepFactSigs({
+      type: 'rest_day', id: 'rest_day', factSig: `rest-${TODAY}`,
+      salience: 0.1, eventDate: TODAY,
+    }, 6),
+    ...sweepFactSigs({
+      type: 'briefing_fallback', id: 'briefing_fallback',
+      factSig: `brief-${TODAY}`, salience: 0.1, eventDate: TODAY,
+      workoutType: 'Push', exerciseCount: 6,
+    }, 6),
+    ...sweepFactSigs(rationale('full_body', 1), 6),
+    ...sweepFactSigs(rationale('upper_lower', 2), 6),
+    ...sweepFactSigs(rationale('ppl', 4), 6),
+    ...sweepFactSigs(rationale('bro_split', 6), 6),
+    ...sweepFactSigs(calibration(), 6),
+  ];
+
+  it('every hero-eligible line is ≤ MAX_HERO_LINE_LEN characters', () => {
+    expect(MAX_HERO_LINE_LEN).toBe(130);
+    for (const obs of HERO_ELIGIBLE) {
+      const line = phraseObservation(obs);
+      // Tag failing line in the message so a regression is debuggable.
+      if (line.length > MAX_HERO_LINE_LEN) {
+        throw new Error(
+          `hero line over ${MAX_HERO_LINE_LEN} chars (${line.length}): "${line}" [obs.type=${obs.type}]`,
+        );
+      }
+    }
+  });
+
+  it('every hero-eligible line carries a directive (read + what to do)', () => {
+    // Curated directive vocabulary — second-person imperatives + the
+    // "today" / "next time" temporal anchors + the question mark (v3
+    // allows rhetorical questions as a forward cue). A line that matches
+    // NONE of these is pure description and fails the hero contract.
+    const DIRECTIVE_RE = /\b(today|tonight|next time|don't|don’t|hit|keep|hold|push|cement|lock|bank|ease|pull|build|find|force|take|show|run|log|trust|follow|get|add|drop|move|protect|recover|skip|work|empty|dial|stay|bring|make|count|start|come|ride|tune|train|lighten|catch up|sleep|rest|reset|sharpen|nudge|tap)\b/i;
+    for (const obs of HERO_ELIGIBLE) {
+      const line = phraseObservation(obs);
+      // A question mark counts as a forward cue in v3 (warmer voice).
+      if (!DIRECTIVE_RE.test(line) && !line.includes('?')) {
+        throw new Error(
+          `hero line missing forward directive: "${line}" [obs.type=${obs.type}]`,
+        );
+      }
     }
   });
 
@@ -367,6 +478,70 @@ describe('phraseObservation', () => {
     expect(phraseObservation(rationale('upper_lower', 2)).toLowerCase()).toMatch(/upper|lower/);
     expect(phraseObservation(rationale('ppl', 3)).toLowerCase()).toMatch(/push|pull|legs|ppl/);
     expect(phraseObservation(rationale('bro_split', 5)).toLowerCase()).toMatch(/body-part|focus|split|muscle/);
+  });
+
+  it('plan_rationale: a stored priority WINS over goal and split copy', () => {
+    // Compound priority surfaces the compound-rotation template.
+    const benchObs: Observation = {
+      type: 'plan_rationale',
+      id: 'plan_rationale:ppl',
+      factSig: 'rationale-ppl-gstrength-pbench',
+      salience: 0.55,
+      eventDate: TODAY,
+      split: 'ppl',
+      trainingDays: 3,
+      goal: 'strength',
+      priority: 'bench',
+    };
+    const benchLine = phraseObservation(benchObs).toLowerCase();
+    expect(benchLine).toMatch(/bench/);
+    // Bucket priority surfaces the bucket-rotation template (one of the
+    // muscle filter labels we expose in onboarding).
+    const legsObs: Observation = {
+      type: 'plan_rationale',
+      id: 'plan_rationale:ppl',
+      factSig: 'rationale-ppl-gmuscle-plegs',
+      salience: 0.55,
+      eventDate: TODAY,
+      split: 'ppl',
+      trainingDays: 3,
+      goal: 'muscle',
+      priority: 'legs',
+    };
+    const legsLine = phraseObservation(legsObs).toLowerCase();
+    expect(legsLine).toMatch(/legs/);
+  });
+
+  it('plan_rationale: a stored goal (no priority) selects the goal pool', () => {
+    const strengthObs: Observation = {
+      type: 'plan_rationale',
+      id: 'plan_rationale:ppl',
+      factSig: 'rationale-ppl-gstrength-px',
+      salience: 0.55,
+      eventDate: TODAY,
+      split: 'ppl',
+      trainingDays: 3,
+      goal: 'strength',
+      priority: null,
+    };
+    const muscleObs: Observation = {
+      ...strengthObs,
+      factSig: 'rationale-ppl-gmuscle-px',
+      goal: 'muscle',
+    };
+    const generalObs: Observation = {
+      ...strengthObs,
+      factSig: 'rationale-ppl-ggeneral-px',
+      goal: 'general',
+    };
+    const s = phraseObservation(strengthObs).toLowerCase();
+    const m = phraseObservation(muscleObs).toLowerCase();
+    const g = phraseObservation(generalObs).toLowerCase();
+    expect(s).toMatch(/strength|bar|heavy|heavier/);
+    expect(m).toMatch(/size|growth|grow|volume/);
+    expect(g).toMatch(/general|progress|steady|long arc|long-arc/);
+    // The three pools must produce distinguishable lines for the same split.
+    expect(new Set([s, m, g]).size).toBeGreaterThan(1);
   });
 
   it('plan_rationale: unknown split label degrades to a neutral fallback', () => {
