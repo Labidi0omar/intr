@@ -12,6 +12,12 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["-y", "serve", "legal", "-l", "4321", "--no-port-switching"],
       "port": 4321
+    },
+    {
+      "name": "intr-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "web"],
+      "port": 8081
     }
   ]
 }

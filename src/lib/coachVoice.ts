@@ -170,6 +170,38 @@ const BLOCK_WEEK4_POOL: readonly string[] = [
   `Recovery week. The smart lifters treat this one as seriously as the heavy ones. Go light, move honest.`,
 ];
 
+// Muscle lane, wk1 — "intro" of the volume ramp. Volume starts LOW today
+// and climbs across the next two weeks; the coach's job is to set that
+// expectation so the user doesn't push loads on a build week where the
+// stimulus is meant to come from more sets, not more weight. Follows the
+// voice conventions of the wk3/wk4 pools — avoids "block", "deload",
+// "mesocycle" (the insider vocabulary the test pins away from). Plain
+// language: "the ramp starts here", "the sets climb from here".
+const BLOCK_WEEK1_MUSCLE_POOL: readonly string[] = [
+  `Week 1 of 4 — easing in. Fewest sets you'll do all month today; the ramp climbs from here.`,
+  `Fresh 4-week run. Volume's the lowest it'll be today. Move well; the sets stack over the coming weeks.`,
+  `Week 1 — the intro. Light on sets today by design. Dial the form; the volume comes.`,
+  `Start of a new 4-week run. Today's the light end of the ramp. Bank clean reps, sets grow from here.`,
+  `Week 1 of 4. Don't push loads today — the reps and sets are what grow across the coming weeks.`,
+  `Easy entry into the 4-week run. Volume's low today by design. Move honest; the ramp starts next week.`,
+  `Week 1. The point today isn't intensity — it's clean setup for the sets that come.`,
+  `New 4-week run, easing in. Today's the lightest volume you'll see. Bring the reps, the sets stack later.`,
+];
+
+// Muscle lane, wk2 — "build" week. Volume is CLIMBING from wk1; the user
+// should feel more sets today than last week. This is where the stimulus
+// starts landing.
+const BLOCK_WEEK2_MUSCLE_POOL: readonly string[] = [
+  `Week 2 of 4 — volume's climbing. More sets today than last week. Keep the reps honest.`,
+  `Build week. The sets ramp up from here; hold the loads, let the volume do the work.`,
+  `Week 2 — the ramp is on. More sets today, same clean reps. Don't chase weight yet.`,
+  `Volume climbing into week 2. Extra sets today land more stimulus, not more strain — keep them clean.`,
+  `Build week — sets creep up. The growth signal is in the extra volume; don't rush loads today.`,
+  `Week 2 of 4. More work today than last; the body's ready. Reps first, weight later.`,
+  `The ramp is climbing. Today has more sets than last week — that's the point. Bring the effort to each.`,
+  `Build week. Volume up, load steady. The extra sets are what earn next week's peak.`,
+];
+
 // Effort zone — plain language. Hard sets should be close to failure;
 // when they're consistently easy, the loads are too light. We avoid "RIR"
 // (insider jargon — pinned by tests).
@@ -355,23 +387,35 @@ const PRIORITY_COMPOUND_POOL: readonly ((priority: string) => string)[] = [
 
 // Goal-only personalization — surfaces when the user picked a goal but no
 // specific priority. No interpolation, no digits. Each line ≤ 130 and
-// carries a directive cue (own/chase/show/run/keep).
+// carries a directive cue.
+//
+// The v2 pools reflect the ACTUAL programming (goalProfile.ts + the RIR
+// ladder in loadPrescription.ts):
+//   strength — heavy compound 3-5, accessory 8-10, target RIR 1-3 (hold
+//     on a clean set with one in the tank, only back off on true failure).
+//     Language: "one in the tank," "clean top set," "own the bar."
+//   muscle   — hypertrophy compound 6-10, isolation 10-15, target RIR 0-2,
+//     volume climbs before load (add a rep before a plate). Language:
+//     "add a rep," "close to the edge on the last set."
+//   general  — PURE PASSTHROUGH: catalog reps / rest / sets flow through
+//     unchanged. No lane-specific dose message applies. Copy stays generic
+//     — "show up, train clean, log the work."
 const GOAL_STRENGTH_POOL: readonly string[] = [
-  `Tuned for strength — own the bar before you add to it. Form first today.`,
-  `Built for heavier numbers. Keep the form crisp before chasing more weight today.`,
-  `Strength focus. Run the big lifts with intent today; the rest is support.`,
-  `Strength plan. The bar is the test — own it, don't rush it. Add weight only when the rep is clean.`,
-  `Tuned for strength. Today's heavy lifts are the whole point. Bring full focus to the bar.`,
-  `Built for strength. The numbers come from clean reps, not grinding. Keep it sharp today.`,
+  `Strength lane — heavy compound, one in the tank. Own the top set today; add weight only when it moves clean.`,
+  `Built for heavier bars. Leave a rep in reserve on the big lift today — the number climbs on clean reps, not grinders.`,
+  `Strength focus. The compound is the test: a solid rep at target load beats a shaky rep at a bigger number.`,
+  `Strength plan. One or two left in the tank is on target today — force it, and next session drops back.`,
+  `Tuned for strength. Bring intent to the main lift; keep enough in reserve to make the last rep look like the first.`,
+  `Built for strength. Load moves when the top of the range comes up clean — that's the whole progression rule.`,
 ];
 
 const GOAL_MUSCLE_POOL: readonly string[] = [
-  `Tuned for size — chase a clean rep before the weight. Today, push every set close to the limit.`,
-  `Built around growth. Push every set close to failure, take the rest you need today.`,
-  `Size focus. Show up for the volume today; reps stay clean to the end.`,
-  `Tuned for size. The muscle grows from effort, not from weight. Take every set near the edge today.`,
-  `Growth plan. Today: chase the rep, not the plate. Push close to failure, rest honest.`,
-  `Built for muscle. The volume is the work — show up for every set today, don't coast the last ones.`,
+  `Size lane — add a rep before you add a plate. Today, push the top set to the edge of the range.`,
+  `Growth plan. Zero-to-one in reserve on the last set is on target; the weight climbs only after the reps do.`,
+  `Tuned for muscle. Volume before load: try for one more rep in the range today, keep the weight honest.`,
+  `Built around growth. Chase the top rep in the range today — a clean 12 earns tomorrow's heavier 8.`,
+  `Muscle focus. Last set close to failure, rest full so the next set is real work, not fatigue.`,
+  `Size plan. The accessories are the growth driver — push the isolation sets to the edge of clean form.`,
 ];
 
 const GOAL_GENERAL_POOL: readonly string[] = [
@@ -471,8 +515,16 @@ export function phraseObservation(obs: CoachObservation): string {
       const denom = obs.metric === 'days14' ? 14 : 28;
       return pick(CONSISTENCY_POOL, obs.factSig)(obs.count, denom);
     }
-    case 'block_position':
-      return pick(obs.blockWeek === 3 ? BLOCK_WEEK3_POOL : BLOCK_WEEK4_POOL, obs.factSig);
+    case 'block_position': {
+      // wk1/2 pools only fire for muscle-lane observations (buildBlockPosition
+      // gates on goal === 'muscle' before emitting them). If a wk1/2
+      // observation reaches this phraser without goal === 'muscle' (defensive),
+      // fall through to the wk3 pool — better a stale line than a hard crash.
+      if (obs.blockWeek === 4) return pick(BLOCK_WEEK4_POOL, obs.factSig);
+      if (obs.blockWeek === 3) return pick(BLOCK_WEEK3_POOL, obs.factSig);
+      if (obs.blockWeek === 2) return pick(BLOCK_WEEK2_MUSCLE_POOL, obs.factSig);
+      return pick(BLOCK_WEEK1_MUSCLE_POOL, obs.factSig);
+    }
     case 'effort_zone':
       return obs.band === 'high'
         ? pick(EFFORT_HIGH_POOL, obs.factSig)(obs.pct)

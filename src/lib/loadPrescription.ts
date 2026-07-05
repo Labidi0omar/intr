@@ -8,6 +8,25 @@
 // WHICH accessory to drop and writing the reasoning line; it is not good at
 // arithmetic. Load math lives here, gets unit-tested, never silently
 // regresses.
+//
+// Goal-aware (v2): the RIR ladder shifts by lane (profiles.goal). Strength
+// targets RIR 1-3 — climb on light sets (3+), hold on clean target sets
+// (1-2), only back off on true failure (0). Progression happens on load,
+// not on reps to failure. Muscle keeps the current 1-2-hold ladder;
+// general is a pure passthrough to the pre-goal engine.
+// hitTargetZone(rir, goal) answers the analytics question "was this set
+// in the sweet spot" per lane.
+// See goalProfile.ts for the dose side of the same feature.
+//
+// Volume-first (Part 4): the top-of-band gate is universal — once the caller
+// knows the plan's rep band and last session's reps, `progress` is downgraded
+// to `hold` unless the top of the band was reached. For strength that means
+// "add load only when the top set hits the ceiling"; for muscle/general it
+// enforces "climb reps within the band before climbing weight." The next-
+// session rep target lives in goalProfile.nextVolumeStep — this file only
+// decides the weight suggestion.
+
+export type Goal = 'strength' | 'muscle' | 'general';
 
 export interface PrescriptionInput {
   /** Most recent logged weight for this exercise, in kg. */
@@ -24,7 +43,36 @@ export interface PrescriptionInput {
    * energy down-modifier remains a separate safety net.
    */
   fitnessLevel?: 'beginner' | 'intermediate' | 'advanced';
+  /** User's training goal (profiles.goal). Shifts the RIR ladder — strength
+   *  targets RIR 2-3 (climb only when there's plenty in the tank), muscle
+   *  and general keep the current 1-2 target. Omitted → treated as
+   *  'general' for a graceful default. */
+  goal?: Goal;
+  /** Best set's reps last session for this lift. Optional — when omitted,
+   *  the top-of-band gate is off and the engine behaves as it did pre-goal
+   *  (progress on RIR alone). When set together with `topReps`, progress is
+   *  suppressed unless lastReps >= topReps: the "add load only when the
+   *  band has been topped" rule. */
+  lastReps?: number | null;
+  /** Top of the plan's rep band for this lift (e.g. 12 for "8-12", or 5
+   *  for a strength "3-5"). Callers parse with goalProfile.parseBand. */
+  topReps?: number | null;
+  /** Number of prior sessions logged against this specific lift (any
+   *  weight, any date). When ≤ CALIBRATION_SESSIONS (or fitnessLevel ===
+   *  'beginner'), the calibration damper fires: upward moves are capped to
+   *  the smallest step and `lastRir === 0` is treated as "hold" instead
+   *  of "failure" — a novice reporting "0 reps left" is far more likely a
+   *  miscalibrated 3-4 RIR than a true failure. RIR is a noisy instrument,
+   *  worst exactly where it matters most. Undefined → no session-count
+   *  damper (only fitnessLevel drives calibration). */
+  sessionCountForLift?: number;
 }
+
+/** Number of logged sessions per lift below which the calibration damper
+ *  fires (RIR treated as unreliable). Advanced lifters new to a specific
+ *  lift still get the damper — the noise is about the lift, not the
+ *  lifter's overall experience. */
+export const CALIBRATION_SESSIONS = 3;
 
 export interface Prescription {
   suggestedWeightKg: number;
@@ -62,8 +110,10 @@ export interface Prescription {
   stallWeeks?: number;
 }
 
-/** Round to the nearest loadable increment (2.5 kg standard plate math). */
-function roundToPlate(kg: number, step = 2.5): number {
+/** Round to the nearest loadable increment (2.5 kg standard plate math).
+ *  Exported for src/lib/anchorSeed.ts, which rounds an e1RM-derived
+ *  working weight to the same plate grid as every other prescribed kg. */
+export function roundToPlate(kg: number, step = 2.5): number {
   return Math.max(step, Math.round(kg / step) * step);
 }
 
@@ -73,7 +123,10 @@ function roundToPlate(kg: number, step = 2.5): number {
 export const STALL_WEEKS = 3;
 
 export function prescribeLoad(input: PrescriptionInput): Prescription {
-  const { lastWeightKg, lastRir, energyScore, isCompound, fitnessLevel } = input;
+  const {
+    lastWeightKg, lastRir, energyScore, isCompound, fitnessLevel,
+    goal, lastReps, topReps, sessionCountForLift,
+  } = input;
 
   if (!lastWeightKg || lastWeightKg <= 0) {
     return { suggestedWeightKg: lastWeightKg, deltaPct: 0, rationale: 'no_history', cause: 'unknown' };
@@ -84,31 +137,104 @@ export function prescribeLoad(input: PrescriptionInput): Prescription {
     return { suggestedWeightKg: lastWeightKg, deltaPct: 0, rationale: 'hold', cause: 'rir' };
   }
 
+  // Calibration damper — fires for beginners (overall) or for anyone in
+  // their first CALIBRATION_SESSIONS on a specific lift. RIR is noisy
+  // *exactly* where it matters most: novices under-rate effort (they think
+  // they have 2 in reserve when they have 5), and even experienced lifters
+  // are miscalibrated on a lift they haven't done before. The damper both
+  // halves the step AND reframes lastRir === 0 as "hold" instead of
+  // "failure" — a self-reported 0 in that window is much more likely a
+  // shaky rep than a real ceiling.
+  const inCalibrationWindow =
+    fitnessLevel === 'beginner' ||
+    (typeof sessionCountForLift === 'number' && sessionCountForLift < CALIBRATION_SESSIONS);
+
   // Base step from RIR. Compounds tolerate larger jumps than isolations.
-  // Beginners get the step halved (RIR self-reports are noisy at first).
-  const beginnerScale = fitnessLevel === 'beginner' ? 0.5 : 1;
-  const up = (isCompound ? 0.05 : 0.025) * beginnerScale; // +5% compound / +2.5% isolation
+  // Novices / early-lift sessions get the step halved.
+  const stepScale = inCalibrationWindow ? 0.5 : 1;
+  const up = (isCompound ? 0.05 : 0.025) * stepScale;
+
+  // Effective lane. Undefined goal → 'general' (matches ensureCurrentWeekPlan's
+  // fallback so the ladder here agrees with the plan's dose).
+  const lane: Goal =
+    goal === 'strength' || goal === 'muscle' || goal === 'general' ? goal : 'general';
 
   let deltaPct: number;
   let rationale: Prescription['rationale'];
   let cause: Prescription['cause'];
 
-  if (lastRir >= 3) {
-    deltaPct = up;        // too easy → climb
-    rationale = 'progress';
-    cause = 'rir';
-  } else if (lastRir === 2) {
-    deltaPct = up / 2;    // target zone → small bump
-    rationale = 'progress';
-    cause = 'rir';
-  } else if (lastRir === 1) {
-    deltaPct = 0;         // hard → repeat
+  if (lane === 'strength') {
+    // Strength ladder — target RIR 1-3 (climb when there's plenty in the
+    // tank, hold on a clean target set, only back off on true failure).
+    // RIR 1 is a good strength set — a clean rep with one in reserve —
+    // and holding there is exactly the point of the lane. Only RIR 0
+    // (actual failure) drops the load next session.
+    if (lastRir >= 3) {
+      deltaPct = up;
+      rationale = 'progress';
+      cause = 'rir';
+    } else if (lastRir === 2 || lastRir === 1) {
+      deltaPct = 0;                    // target zone — hold, don't push
+      rationale = 'hold';
+      cause = 'rir';
+    } else {
+      deltaPct = -0.05;
+      rationale = 'backoff';
+      cause = 'failure';
+    }
+  } else {
+    // Muscle / general — current 1-2-hold ladder. Muscle's analytics target
+    // (0-2 via hitTargetZone) is a WIDER "on target" zone but the ladder
+    // still treats an actual RIR 0 as failure — grinding a rep in the gym
+    // is different from having targeted proximity to failure, and a real
+    // failure earns next-session lightening either way.
+    if (lastRir >= 3) {
+      deltaPct = up;
+      rationale = 'progress';
+      cause = 'rir';
+    } else if (lastRir === 2) {
+      deltaPct = up / 2;
+      rationale = 'progress';
+      cause = 'rir';
+    } else if (lastRir === 1) {
+      deltaPct = 0;
+      rationale = 'hold';
+      cause = 'rir';
+    } else {
+      deltaPct = -0.05;
+      rationale = 'backoff';
+      cause = 'failure';
+    }
+  }
+
+  // Calibration damper's second effect: a novice / new-to-this-lift RIR 0
+  // is reframed as "hold" instead of "failure." Only fires when the damper
+  // is active — established lifters keep the failure backoff.
+  if (inCalibrationWindow && lastRir === 0) {
+    deltaPct = 0;
     rationale = 'hold';
     cause = 'rir';
-  } else {
-    deltaPct = -0.05;     // failure → back off 5%
-    rationale = 'backoff';
-    cause = 'failure';    // true failure backoff — earns the "hit the wall" framing
+  }
+
+  // Top-of-band gate — universal across lanes when the caller provides
+  // both `lastReps` and `topReps`. Suppresses a would-be progress into a
+  // hold unless last session's reps hit the top of the rep band. This is
+  // the "add load only when the band has been topped" rule.
+  //
+  // NOTE (product cut): the workout screen no longer captures per-set reps
+  // from the user — exercise_logs.reps is auto-populated with the midpoint
+  // of the prescribed range for history only, and app/workout.tsx
+  // intentionally SKIPS passing lastReps into this call. The gate stays
+  // inert in current production (guard needs both inputs); progression is
+  // pure RIR-driven. The gate code is kept here so the machinery still
+  // works if per-set rep capture is ever brought back.
+  const gateActive =
+    typeof lastReps === 'number' && Number.isFinite(lastReps) &&
+    typeof topReps === 'number' && Number.isFinite(topReps) && topReps > 0;
+  if (gateActive && rationale === 'progress' && (lastReps as number) < (topReps as number)) {
+    deltaPct = 0;
+    rationale = 'hold';
+    cause = 'rir';
   }
 
   // Readiness modifier: only pulls DOWN on bad days, never inflates on good ones.
@@ -282,7 +408,16 @@ export function wasFollowed(suggestedKg: number, loggedKg: number): boolean {
   return Math.abs(loggedKg - suggestedKg) <= 2.5;
 }
 
-/** Did the set land in the autoregulation sweet spot (1–2 RIR)? */
-export function hitTargetZone(rir: number | null): boolean {
+/** Did the set land in the autoregulation sweet spot? Zone is lane-aware:
+ *    - strength: 1-3 (hold on a clean target set; back off only on true failure)
+ *    - muscle:   0-2 (proximity to failure is the growth driver)
+ *    - general:  1-2 (unchanged from the pre-goal engine — pass-through)
+ *
+ *  Passing `goal` is optional; unknown / undefined → general behaviour, so
+ *  the analytics event stays back-compat for callers not yet plumbed. */
+export function hitTargetZone(rir: number | null, goal?: Goal): boolean {
+  if (rir == null) return false;
+  if (goal === 'strength') return rir === 1 || rir === 2 || rir === 3;
+  if (goal === 'muscle') return rir === 0 || rir === 1 || rir === 2;
   return rir === 1 || rir === 2;
 }

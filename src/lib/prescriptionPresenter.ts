@@ -4,6 +4,16 @@
 // decision into the workout-screen hero block and the per-exercise lines
 // on the finish recap. No math, no schema changes, no new facts.
 //
+// Goal-lane note: the engine is now goal-aware (strength holds at RIR 2;
+// muscle/general hold at RIR 1) but the copy here is deliberately generic
+// — "That felt right last time, match X" reads correctly for either
+// lane's target-zone hold. Similarly, "Easing down — clean reps over
+// heavy ones" reads correctly for a strength user's new RIR 1 → small
+// backoff branch (that IS the intended message for the strength lane's
+// "one too close to the edge on a heavy compound"). We do NOT need
+// per-goal copy branches; the sentences track the engine's decision
+// without needing to know which lane produced it.
+//
 // Why this lives in src/lib (not in the screen file): pure + tested. The
 // screen can keep growing; this layer can be exercised without a React
 // harness, the same way coachRecap.buildFallbackRecap and coachVoice
@@ -45,6 +55,26 @@ export interface PrescriptionHeroInput {
    *  hold and low-energy branches. Defaults to 3 (normal) when missing,
    *  which collapses to the non-energy hold copy. */
   energyScore?: number;
+  /** Set ONLY when this prescription's entire history is a single
+   *  onboarding-seeded anchor entry (see src/lib/anchorSeed.ts) — i.e. the
+   *  user hasn't logged a real session for this lift yet. The caller
+   *  (workout.tsx) is responsible for confirming that before passing this:
+   *  once a real session is logged, pass undefined/null and the note stops
+   *  appearing, per spec ("one line, at that moment only"). Appends
+   *  "Based on your {weightKg}×{reps}." to the reason so the first number
+   *  visibly ties back to what the user typed at onboarding. */
+  anchorSeed?: { weightKg: number; reps: number } | null;
+  /** Set ONLY on the true cold-start path (no rx, no lastWeightKg) for a
+   *  DIFFERENT lift than any anchor, when src/lib/anchorDerivation.ts can
+   *  estimate a starting weight from a related anchor lift's working
+   *  weight (e.g. Incline Bench estimated from a seeded Flat Bench).
+   *  Mutually exclusive with anchorSeed — that field is for the anchor
+   *  exercise ITSELF. Deliberately renders as a SOFTER "≈{kg}kg,
+   *  estimated from your {basisLabel} — calibrate as you go" line with NO
+   *  bold headline weightLabel (unlike an anchored or prescribed lift),
+   *  so a guess never reads with the same confidence as a real number —
+   *  see the module's cold-start branch. */
+  derivedEstimate?: { weightKg: number; basisLabel: string } | null;
 }
 
 // ── Copy ────────────────────────────────────────────────────────────────
@@ -184,9 +214,36 @@ function reasonFor(input: ReasonInput): string {
 // ── Hero block (workout active-set screen) ──────────────────────────────
 
 export function buildPrescriptionHero(input: PrescriptionHeroInput): PrescriptionHero {
-  const { rx, lastWeightKg, hasLastRir, energyScore } = input;
+  const { rx, lastWeightKg, hasLastRir, energyScore, anchorSeed, derivedEstimate } = input;
+  // Appends the "Based on your 100×5." attribution when this prescription's
+  // only history is a seeded anchor entry. A second, short sentence — never
+  // replaces the causal reason above it.
+  const withAnchorNote = (reason: string): string =>
+    anchorSeed ? `${reason} Based on your ${fmtKg(anchorSeed.weightKg)}×${anchorSeed.reps}.` : reason;
+
   if (!rx || rx.rationale === 'no_history') {
-    return { tone: 'cold', weightLabel: '', deltaLabel: '', reason: COPY_COLD_START };
+    // Anchor-derived ESTIMATE for a DIFFERENT lift than any anchor (e.g.
+    // Incline Bench estimated from a seeded Flat Bench). Deliberately NO
+    // bold headline weightLabel — that badge is reserved for a real
+    // prescription or the anchor's own confident number. The "≈{kg}kg"
+    // lives only in the softer reason sentence, so a guess can never be
+    // mistaken for the same level of confidence as "based on your 100×5."
+    if (derivedEstimate && derivedEstimate.weightKg > 0) {
+      const kg = fmtKg(derivedEstimate.weightKg);
+      return {
+        tone: 'cold',
+        weightLabel: '',
+        deltaLabel: '',
+        reason: `≈${kg}kg, estimated from your ${derivedEstimate.basisLabel} — calibrate as you go.`,
+      };
+    }
+    // First-time exercises render the Coach's Call hero with the bare
+    // calibration copy — no predicted weight. There's no history yet to
+    // ground a number in, so we don't show one. (In practice a seeded
+    // anchor never reaches this branch — writing the seed row means
+    // prescribeLoad sees real history and rx.rationale is never
+    // 'no_history' — but withAnchorNote is applied here too for safety.)
+    return { tone: 'cold', weightLabel: '', deltaLabel: '', reason: withAnchorNote(COPY_COLD_START) };
   }
   const last = typeof lastWeightKg === 'number' && lastWeightKg > 0
     ? lastWeightKg
@@ -213,7 +270,7 @@ export function buildPrescriptionHero(input: PrescriptionHeroInput): Prescriptio
     tone: TONE_BY_RATIONALE[rx.rationale],
     weightLabel,
     deltaLabel,
-    reason: reasonFor({
+    reason: withAnchorNote(reasonFor({
       rationale: rx.rationale,
       cause: rx.cause,
       hasLastRir: hasLastRir ?? false,
@@ -226,7 +283,7 @@ export function buildPrescriptionHero(input: PrescriptionHeroInput): Prescriptio
       // while the delta label rendered "Same as last."
       diff,
       band: bandFor(energyScore),
-    }),
+    })),
   };
 }
 

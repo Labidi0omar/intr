@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Animated,
   BackHandler,
   FlatList,
@@ -45,12 +46,41 @@ import { enqueuePendingSave, runFinishPersistence, type PendingSave } from '../s
 import { computeSessionPrs } from '../src/lib/prDetection';
 import { reportSilent } from '../src/lib/errorReporting';
 import { prescribeLoad, applyStallNudge, wasFollowed, hitTargetZone, type Prescription } from '../src/lib/loadPrescription';
-import { estimateStartingLoad, type Sex as StartingLoadSex } from '../src/lib/startingLoad';
+import { normalizeExName, shouldShowCoachCall, type HistoryLoadState } from '../src/lib/coachCall';
+import { ANCHOR_LIFTS, ANCHOR_SEED_NOTES_STORAGE_KEY, type AnchorSeedNote } from '../src/lib/anchorSeed';
+import { ANCHOR_BASIS_LABEL, basisForExercise, buildAnchorWorkingWeights, deriveFromAnchors } from '../src/lib/anchorDerivation';
 import {
   buildPrescriptionHero,
   type PrescriptionTone,
 } from '../src/lib/prescriptionPresenter';
 import { generateAdHocDay, isCompoundName, CURRENT_PLAN_VERSION, type AdHocWorkoutType } from '../src/lib/planGeneration';
+import { parseBand } from '../src/lib/goalProfile';
+
+/** Auto-compute the reps we write into exercise_logs from the plan's rep
+ *  string. Product decision: users are not prompted for reps anymore — the
+ *  plan says "8-12", so we assume the MIDPOINT (10) and log it. Rounded to
+ *  the nearest integer. Returns null for anything we can't parse cleanly
+ *  ("30-60s" time-under-tension holds, "AMRAP", garbage) — the caller
+ *  writes null to exercise_logs.reps in that case, which is fine: the
+ *  history column tolerates nulls and no downstream reader now depends on
+ *  reps being present.
+ *
+ *  IMPORTANT: this value is HISTORY / DISPLAY only. It must never be fed
+ *  back into prescribeLoad — the top-of-band gate would see midpoint <
+ *  topReps every session and downgrade every 'progress' into a permanent
+ *  hold. Progression is intentionally pure RIR-driven now. */
+function midpointFromReps(reps: string | number | null | undefined): number | null {
+  if (reps == null) return null;
+  if (typeof reps === 'number' && Number.isFinite(reps)) return Math.round(reps);
+  if (typeof reps !== 'string') return null;
+  const trimmed = reps.trim();
+  const band = parseBand(trimmed);
+  if (band) return Math.round((band.min + band.max) / 2);
+  // Bare integer like "10".
+  const single = /^\s*(\d+)\s*$/.exec(trimmed);
+  if (single) return parseInt(single[1], 10);
+  return null;
+}
 import { ensureCurrentWeekPlan } from '../src/lib/planSync';
 import { applySwapToRows, extractPlanDays } from '../src/lib/planSwap';
 import { secondFrameUrl } from '../src/lib/exerciseImage';
@@ -157,6 +187,10 @@ type Exercise = {
   primaryMuscle: string;
   equipment?: string;
   imageUrl?: string;
+  /** Optional sub-region emphasis threaded from the catalog through
+   *  the plan generator to MuscleDetails. Undefined = no emphasis
+   *  (falls back to primaryMuscle's default slug). */
+  emphasis?: import('../src/constants/exercises').ExerciseEntry['emphasis'];
 };
 
 type PlanDay = {
@@ -236,6 +270,19 @@ export default function WorkoutScreen() {
   // last exercise — the state update wouldn't have flushed yet. The ref is
   // written synchronously so finishWorkout sees the freshest value.
   const rirLogRef = useRef<Record<string, number>>({});
+  // Per-exercise reps written on set commit. NO user-facing input — the
+  // value is auto-computed as the rounded midpoint of the plan's rep range
+  // (e.g. "8-12" → 10, "3-5" → 4) via midpointFromReps below, so
+  // exercise_logs still gets useful history without an extra prompt.
+  //
+  // IMPORTANT: this midpoint is HISTORY / DISPLAY only. It is NOT fed back
+  // into prescribeLoad's top-of-band gate — passing an auto-midpoint would
+  // freeze that gate at "hold" every session and silently kill all load
+  // progression. See the prescribeLoad call site for the explicit skip.
+  // The ref+state pattern is kept so finishWorkout's synchronous read still
+  // sees the value written this tick on the last exercise.
+  const repsLogRef = useRef<Record<string, number>>({});
+  const [, setRepsLog] = useState<Record<string, number>>({});
   // Snapshot of the prescription as it was shown to the user. Lets
   // finishWorkout compare suggested vs. actually-logged without recomputing
   // (which would race against changing energyScore / lastWeights mid-session).
@@ -254,7 +301,7 @@ export default function WorkoutScreen() {
     energy_score: number;
   };
   const [shownPrescriptions, setShownPrescriptions] = useState<Record<string, ShownRx>>({});
-  const [lastWeights, setLastWeights] = useState<Record<string, { weight: number; date: string; rir: number | null }>>({});
+  const [lastWeights, setLastWeights] = useState<Record<string, { weight: number; date: string; rir: number | null; reps: number | null }>>({});
   // Full per-exercise history (last 6 entries DESC) for coach-hint trend logic.
   // RIR is included on each entry so the coach-recap context builder can
   // surface a per-lift trend with RIR for the model — the data is already in
@@ -269,6 +316,19 @@ export default function WorkoutScreen() {
   // the working assumption in this codebase, the same one coachObservations
   // uses on the dashboard side.
   const [liftSessionTops, setLiftSessionTops] = useState<Record<string, Array<{ topKg: number; date: string }>>>({});
+  // Load status for the initial exercise_logs history fetch. Feeds
+  // shouldShowCoachCall so the Coach's Call hero can distinguish "still
+  // loading" from "genuinely no history yet." A silent fetch failure
+  // used to leave every lift indistinguishable from a cold-start —
+  // the whole hero would vanish for a full session with no signal in
+  // Sentry beyond the generic fetch tag. See src/lib/coachCall.ts.
+  //
+  // Transitions:
+  //   'loading' (initial) → 'ready' on first successful fetch
+  //   'loading'           → 'error' after ONE retry also fails; a
+  //                         distinct Sentry tag ('workout:historyFetchEmpty')
+  //                         separates outage from cold-start in the dashboard.
+  const [historyLoad, setHistoryLoad] = useState<HistoryLoadState>('loading');
   const [daysSinceSignup, setDaysSinceSignup] = useState<number>(0);
   // Position within the user's current mesocycle (1–4). Computed in
   // fetchTodayPlan from the earliest weekly_plans row (anchor) and the
@@ -292,16 +352,30 @@ export default function WorkoutScreen() {
   // queue. The UI shows an honest "saved locally, will retry" note so the
   // user knows their session is preserved and will sync on next focus.
   const [syncFailed, setSyncFailed] = useState(false);
+  // "PR detection is in flight." Set true when finishWorkout flips
+  // phase → 'complete' optimistically (immediately after the in-memory
+  // save is built) and cleared when computeSessionPrs settles — success
+  // OR failure. The summary card reads it to render a subtle inline
+  // "Checking for PRs…" placeholder while the durable-save + prior-log
+  // fetch resolve, so the user sees the complete screen instantly but
+  // still gets an honest signal that PR celebrations may still arrive.
+  const [prCheckPending, setPrCheckPending] = useState(false);
   // Fitness level powers the beginner step-halving inside prescribeLoad so
   // the client's pre-fill matches what the server-side replanner computes.
   const [fitnessLevel, setFitnessLevel] = useState<'beginner' | 'intermediate' | 'advanced' | undefined>(undefined);
-  // Cold-start inputs (onboarding). Only used to seed session 1 via
-  // estimateStartingLoad when there is no log history yet — both can stay
-  // undefined and the seed degrades to null (calibration entry, no fake
-  // number). Once history exists, prescribeLoad takes over and these are
-  // ignored entirely.
-  const [bodyweightKg, setBodyweightKg] = useState<number | null>(null);
-  const [sex, setSex] = useState<StartingLoadSex | null>(null);
+  // profiles.goal — read once for the ad-hoc generator (so a "Train anyway"
+  // session inherits the user's lane) and for future prescriptionPresenter
+  // goal-aware reason lines. Fire-and-forget; undefined means fall back to
+  // catalog values, same back-compat contract as the rest of the plumbing.
+  const [goal, setGoal] = useState<'strength' | 'muscle' | 'general' | undefined>(undefined);
+  // Onboarding anchor-lift attribution notes ("based on your 100×5"),
+  // keyed by canonical exercise_name. Read once from AsyncStorage (written
+  // by onboarding.tsx at signup); only consumed by the Coach's Call hero
+  // when this lift's ENTIRE history is still just that seeded row — see
+  // the anchorSeed computation next to the hero render below. Empty object
+  // is the common case (most users skip the anchors step, or it's past
+  // session one) and is a total no-op.
+  const [anchorSeedNotes, setAnchorSeedNotes] = useState<Record<string, AnchorSeedNote>>({});
   // When user taps ⇄ on a pre-screen exercise row, this tracks which one.
   const [swapTargetIndex, setSwapTargetIndex] = useState<number | null>(null);
   const [addExerciseModalVisible, setAddExerciseModalVisible] = useState(false);
@@ -412,24 +486,53 @@ export default function WorkoutScreen() {
     // the other action-time todayStr sites in this file.
     const todayIso = getTodayStr();
     for (const ex of preScreenReduction.exercises) {
-      const last = lastWeights[ex.name];
+      // Reads normalize on the way in so casing/whitespace drift between
+      // plan and DB rows can't silently miss (see COACH_CALL_FIX.md, C).
+      const key = normalizeExName(ex.name);
+      const last = lastWeights[key];
       if (!last || !last.weight) continue;
       const isCompound = isCompoundName(ex.name);
+      // Goal-aware plumbing (v2). All new inputs are optional in
+      // PrescriptionInput so an omission collapses to legacy behavior:
+      //   - goal: shifts the RIR ladder per lane (strength holds at 1-2
+      //     and only backs off on true failure; muscle keeps the 1-hold
+      //     ladder; general is a pure passthrough of the pre-goal engine).
+      //   - sessionCountForLift: exerciseHistory[key] carries up to 6 prior
+      //     entries (from the last-known-good fetch). Under CALIBRATION_
+      //     SESSIONS the damper fires (halved step + RIR 0 reframed as hold).
+      //
+      // TOP-OF-BAND GATE INTENTIONALLY SKIPPED (deliberate dead code).
+      // We no longer ask the user for reps performed — exercise_logs.reps is
+      // auto-populated with the midpoint of the plan's rep range for
+      // history / display only. Feeding that midpoint into `lastReps` here
+      // would trip the gate every session (midpoint < topReps → 'progress'
+      // downgrades to 'hold'), silently freezing all load increases across
+      // the app. The gate needs BOTH lastReps and topReps to fire, so
+      // dropping lastReps makes it inert; the code stays in place in case
+      // we ever bring back real per-set rep logging. Progression today is
+      // pure RIR-driven — the intended product behavior.
+      const sessionCountForLift = exerciseHistory[key]?.length ?? 0;
       const base = prescribeLoad({
         lastWeightKg: last.weight,
         lastRir: last.rir,
         energyScore,
         isCompound,
         fitnessLevel,
+        goal,
+        // topReps + lastReps deliberately omitted — see the block comment above.
+        sessionCountForLift,
       });
       // Additive: applyStallNudge passes the rx through unchanged unless
       // every guard clears (would-hold + clean RIR + normal-or-high
       // energy + flat ≥ STALL_WEEKS with real sessions in the run).
       // Failure / low_energy / backoff cases bypass it by construction —
       // see the guards inside the function.
+      // The output map key stays as the plan-string ex.name (unchanged
+      // API for hero / analytics / prescription_outcome consumers); only
+      // the LOOKUP side is normalized.
       out[ex.name] = applyStallNudge({
         base,
-        liftHistory: liftSessionTops[ex.name] ?? [],
+        liftHistory: liftSessionTops[key] ?? [],
         lastRir: last.rir,
         energyScore,
         isCompound,
@@ -438,7 +541,23 @@ export default function WorkoutScreen() {
       });
     }
     return out;
-  }, [preScreenReduction.exercises, lastWeights, liftSessionTops, energyScore, fitnessLevel]);
+  }, [preScreenReduction.exercises, lastWeights, liftSessionTops, energyScore, fitnessLevel, goal, exerciseHistory]);
+
+  // The user's current working weight per anchor lift (Bench/Squat/
+  // Deadlift/Overhead/Row), read from lastWeights at the five canonical
+  // anchor exercise names. Feeds deriveFromAnchors so a no-history lift
+  // (e.g. Incline Bench with no logged sets) can seed from what the user
+  // told us about a RELATED lift, instead of a blank box OR the removed
+  // bodyweight guess. Empty for any anchor the user never seeded/logged —
+  // deriveFromAnchors treats a missing key as "not anchored," same as a
+  // lift with no map entry at all.
+  const anchorWorkingWeights = useMemo(() => {
+    const byCanonicalName: Partial<Record<string, number>> = {};
+    for (const def of ANCHOR_LIFTS) {
+      byCanonicalName[def.exerciseName] = lastWeights[normalizeExName(def.exerciseName)]?.weight;
+    }
+    return buildAnchorWorkingWeights(byCanonicalName, ANCHOR_LIFTS);
+  }, [lastWeights]);
 
   // Per-exercise coach hints memoized so we don't re-hash N names every render.
   // Every state (no_history, hold, progress, backoff, low-energy pulldown,
@@ -458,7 +577,7 @@ export default function WorkoutScreen() {
       }
       out[ex.name] = coachLineForPrescription(prescriptions[ex.name], {
         exerciseName: ex.name,
-        lastWeightKg: lastWeights[ex.name]?.weight,
+        lastWeightKg: lastWeights[normalizeExName(ex.name)]?.weight,
         energyScore,
         blockWeek,
       });
@@ -578,7 +697,7 @@ export default function WorkoutScreen() {
       try {
         const { data: profileRow } = await supabase
           .from('profiles')
-          .select('created_at, fitness_level, bodyweight_kg, sex')
+          .select('created_at, fitness_level, goal')
           .eq('id', user.id)
           .maybeSingle();
         if (profileRow?.created_at) {
@@ -589,83 +708,142 @@ export default function WorkoutScreen() {
         if (profileRow?.fitness_level) {
           setFitnessLevel(profileRow.fitness_level as 'beginner' | 'intermediate' | 'advanced');
         }
-        // Bodyweight + sex are both NULL-able by design. Only push to state
-        // when present — the seed helper treats null identically to "user
-        // skipped", and that is the desired fallback path.
-        const bw = (profileRow as { bodyweight_kg?: number | string | null } | null)?.bodyweight_kg;
-        if (bw != null) {
-          const n = typeof bw === 'string' ? Number(bw) : bw;
-          if (Number.isFinite(n)) setBodyweightKg(n as number);
-        }
-        const sx = (profileRow as { sex?: string | null } | null)?.sex;
-        if (sx === 'male' || sx === 'female' || sx === 'unspecified') {
-          setSex(sx);
+        const g = (profileRow as { goal?: unknown } | null | undefined)?.goal;
+        if (g === 'strength' || g === 'muscle' || g === 'general') {
+          setGoal(g);
         }
       } catch (e) {
         // Non-fatal — banner will default to no first-week treatment.
         reportSilent(e, 'workout:fetchProfileMeta');
       }
 
+      // Onboarding anchor-lift attribution notes, if onboarding.tsx wrote
+      // any. Best-effort local read — a missing/corrupt cache just means
+      // the "based on your X×Y" line never shows, never a crash.
+      try {
+        const rawNotes = await AsyncStorage.getItem(ANCHOR_SEED_NOTES_STORAGE_KEY);
+        if (rawNotes) {
+          const parsed: Record<string, AnchorSeedNote> = JSON.parse(rawNotes);
+          // Re-key via normalizeExName so the lookup matches lastWeights /
+          // exerciseHistory's convention (both keyed by normalized name) —
+          // onboarding.tsx writes canonical catalog casing, but this keeps
+          // the read side consistent with every other history lookup in
+          // this file rather than relying on exact-string equality.
+          const renormalized: Record<string, AnchorSeedNote> = {};
+          for (const [name, note] of Object.entries(parsed)) {
+            renormalized[normalizeExName(name)] = note;
+          }
+          setAnchorSeedNotes(renormalized);
+        }
+      } catch (e) {
+        reportSilent(e, 'workout:fetchAnchorSeedNotes');
+      }
+
       // Pre-load per-exercise history so coach hints can render immediately
       // on the pre-screen (not delayed until the user taps Start).
-      try {
-        const exerciseNames = todayPlan.exercises.map(e => e.name);
-        const { data: logs } = await supabase
+      //
+      // Reliability contract (see src/lib/coachCall.ts + COACH_CALL_FIX.md):
+      //   • Names are keyed via normalizeExName so swapped-in lifts, and
+      //     any casing / whitespace drift between plan and log rows, don't
+      //     silently miss.
+      //   • On failure we retry ONCE, then flip historyLoad to 'error'
+      //     and report a distinct Sentry tag so an outage is visible in
+      //     the dashboard instead of blending into normal cold-start.
+      //   • The query itself is unchanged in shape — this is a client-side
+      //     correctness fix, not a schema change.
+      setHistoryLoad('loading');
+      const exerciseNames = todayPlan.exercises.map(e => e.name);
+      const runHistoryFetch = async (): Promise<boolean> => {
+        const { data: logs, error } = await supabase
           .from('exercise_logs')
-          .select('exercise_name, weight_kg, logged_date, reps_in_reserve')
+          .select('exercise_name, weight_kg, logged_date, reps_in_reserve, reps')
           .eq('user_id', user.id)
           // EXCLUSION BOUNDARY: load coach must never see recovery weights
           // as "your last set". Drives lastWeights + exerciseHistory.
           .eq('is_recovery', false)
           .in('exercise_name', exerciseNames)
           .order('logged_date', { ascending: false });
+        if (error) return false;
+        if (!logs) return false;
 
-        if (logs) {
-          const latest: Record<string, { weight: number; date: string; rir: number | null }> = {};
-          const grouped: Record<string, { weight_kg: number; date: string; rir: number | null }[]> = {};
-          // Date-keyed max kg per exercise — used to feed applyStallNudge.
-          // logged_date IS the session key (one session per day per
-          // exercise) so a Map<date, maxKg> collapses N sets to 1 entry.
-          const tops: Record<string, Map<string, number>> = {};
-          for (const row of logs as any[]) {
-            if (!(row.exercise_name in latest)) {
-              latest[row.exercise_name] = {
-                weight: row.weight_kg,
-                date: row.logged_date,
-                rir: row.reps_in_reserve ?? null,
-              };
-            }
-            if (!grouped[row.exercise_name]) grouped[row.exercise_name] = [];
-            if (grouped[row.exercise_name].length < 6) {
-              grouped[row.exercise_name].push({
-                weight_kg: row.weight_kg,
-                date: row.logged_date,
-                rir: row.reps_in_reserve ?? null,
-              });
-            }
-            const w = Number(row.weight_kg);
-            if (Number.isFinite(w) && w > 0 && row.logged_date) {
-              if (!tops[row.exercise_name]) tops[row.exercise_name] = new Map();
-              const cur = tops[row.exercise_name].get(row.logged_date) ?? 0;
-              if (w > cur) tops[row.exercise_name].set(row.logged_date, w);
-            }
+        const latest: Record<string, { weight: number; date: string; rir: number | null; reps: number | null }> = {};
+        const grouped: Record<string, { weight_kg: number; date: string; rir: number | null }[]> = {};
+        // Date-keyed max kg per exercise — used to feed applyStallNudge.
+        // logged_date IS the session key (one session per day per
+        // exercise) so a Map<date, maxKg> collapses N sets to 1 entry.
+        const tops: Record<string, Map<string, number>> = {};
+        for (const row of logs as any[]) {
+          const key = normalizeExName(row.exercise_name);
+          if (!key) continue;
+          if (!(key in latest)) {
+            latest[key] = {
+              weight: row.weight_kg,
+              date: row.logged_date,
+              rir: row.reps_in_reserve ?? null,
+              // Reps landed in the schema in migration 20260704000000. Older
+              // rows return null; the top-of-band gate treats null as "no
+              // history" and falls through to the RIR-only ladder, so this
+              // wire is fully back-compat with pre-migration accounts.
+              reps: typeof row.reps === 'number' ? row.reps : null,
+            };
           }
-          setLastWeights(latest);
-          setExerciseHistory(grouped);
-          // Convert each date-map to an oldest-first array — the order
-          // applyStallNudge expects (it sorts internally too, but
-          // pre-sorting here keeps the contract explicit).
-          const topsArr: Record<string, Array<{ topKg: number; date: string }>> = {};
-          for (const [name, m] of Object.entries(tops)) {
-            topsArr[name] = Array.from(m.entries())
-              .map(([date, topKg]) => ({ date, topKg }))
-              .sort((a, b) => a.date.localeCompare(b.date));
+          if (!grouped[key]) grouped[key] = [];
+          if (grouped[key].length < 6) {
+            grouped[key].push({
+              weight_kg: row.weight_kg,
+              date: row.logged_date,
+              rir: row.reps_in_reserve ?? null,
+            });
           }
-          setLiftSessionTops(topsArr);
+          const w = Number(row.weight_kg);
+          if (Number.isFinite(w) && w > 0 && row.logged_date) {
+            if (!tops[key]) tops[key] = new Map();
+            const cur = tops[key].get(row.logged_date) ?? 0;
+            if (w > cur) tops[key].set(row.logged_date, w);
+          }
         }
+        setLastWeights(latest);
+        setExerciseHistory(grouped);
+        // Convert each date-map to an oldest-first array — the order
+        // applyStallNudge expects (it sorts internally too, but
+        // pre-sorting here keeps the contract explicit).
+        const topsArr: Record<string, Array<{ topKg: number; date: string }>> = {};
+        for (const [name, m] of Object.entries(tops)) {
+          topsArr[name] = Array.from(m.entries())
+            .map(([date, topKg]) => ({ date, topKg }))
+            .sort((a, b) => a.date.localeCompare(b.date));
+        }
+        setLiftSessionTops(topsArr);
+        return true;
+      };
+
+      let historyOk = false;
+      try {
+        historyOk = await runHistoryFetch();
       } catch (e) {
-        // Non-fatal — hints will fall back to first-time copy.
         reportSilent(e, 'workout:fetchExerciseHistory');
+      }
+      if (!historyOk) {
+        // Single retry — often catches a transient network blip that
+        // otherwise leaves the whole session's coach card blank.
+        try {
+          historyOk = await runHistoryFetch();
+        } catch (e) {
+          reportSilent(e, 'workout:fetchExerciseHistory:retry');
+        }
+      }
+      if (historyOk) {
+        setHistoryLoad('ready');
+      } else {
+        setHistoryLoad('error');
+        // Distinct tag so this shows up in Sentry as "outage" instead
+        // of hiding among ordinary fetchExerciseHistory noise. The
+        // dashboard can alert on this without alerting on every
+        // rate-limited retry that eventually recovers.
+        reportSilent(
+          new Error('exercise_logs history fetch returned no rows after retry'),
+          'workout:historyFetchEmpty',
+        );
       }
 
       // Energy pre-fill: route param wins; otherwise default (energyScore state
@@ -782,6 +960,76 @@ export default function WorkoutScreen() {
     setSwapModalVisible(true);
   };
 
+  // On-demand history fetch for a single lift — invoked when the user
+  // swaps in an exercise that wasn't in the initial batch fetch.
+  // Without this, the Coach's Call hero on the swapped-in lift would
+  // stay suppressed as if it were cold-start, even for someone with
+  // months of history on that exercise (COACH_CALL_FIX.md, B).
+  //
+  // Fire-and-forget by design — a failed single-lift fetch leaves the
+  // hero in the same suppressed state it was in before (cold-start
+  // fallback), and the user never sees an error surface.
+  const fetchSingleLiftHistory = async (rawExName: string): Promise<void> => {
+    try {
+      if (!rawExName) return;
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data: logs, error } = await supabase
+        .from('exercise_logs')
+        .select('exercise_name, weight_kg, logged_date, reps_in_reserve, reps')
+        .eq('user_id', user.id)
+        .eq('is_recovery', false)
+        .in('exercise_name', [rawExName])
+        .order('logged_date', { ascending: false });
+      if (error || !logs || logs.length === 0) return;
+
+      const partialLatest: Record<string, { weight: number; date: string; rir: number | null; reps: number | null }> = {};
+      const partialGrouped: Record<string, { weight_kg: number; date: string; rir: number | null }[]> = {};
+      const partialTops: Record<string, Map<string, number>> = {};
+      for (const row of logs as any[]) {
+        const k = normalizeExName(row.exercise_name);
+        if (!k) continue;
+        if (!(k in partialLatest)) {
+          partialLatest[k] = {
+            weight: row.weight_kg,
+            date: row.logged_date,
+            rir: row.reps_in_reserve ?? null,
+            reps: typeof row.reps === 'number' ? row.reps : null,
+          };
+        }
+        if (!partialGrouped[k]) partialGrouped[k] = [];
+        if (partialGrouped[k].length < 6) {
+          partialGrouped[k].push({
+            weight_kg: row.weight_kg,
+            date: row.logged_date,
+            rir: row.reps_in_reserve ?? null,
+          });
+        }
+        const w = Number(row.weight_kg);
+        if (Number.isFinite(w) && w > 0 && row.logged_date) {
+          if (!partialTops[k]) partialTops[k] = new Map();
+          const cur = partialTops[k].get(row.logged_date) ?? 0;
+          if (w > cur) partialTops[k].set(row.logged_date, w);
+        }
+      }
+      // MERGE into existing state — partial goes FIRST so any key
+      // already in prev (populated by the initial batch fetch, which is
+      // fresher) wins on collision. On the common path the swapped-in
+      // key isn't in prev at all, so the merge is additive.
+      setLastWeights(prev => ({ ...partialLatest, ...prev }));
+      setExerciseHistory(prev => ({ ...partialGrouped, ...prev }));
+      const partialTopsArr: Record<string, Array<{ topKg: number; date: string }>> = {};
+      for (const [name, m] of Object.entries(partialTops)) {
+        partialTopsArr[name] = Array.from(m.entries())
+          .map(([date, topKg]) => ({ date, topKg }))
+          .sort((a, b) => a.date.localeCompare(b.date));
+      }
+      setLiftSessionTops(prev => ({ ...partialTopsArr, ...prev }));
+    } catch (e) {
+      reportSilent(e, 'workout:fetchSingleLiftHistory');
+    }
+  };
+
   const confirmPreScreenSwap = (selected: typeof EXERCISES[0]) => {
     if (!planDay || swapTargetIndex === null) return;
     const swapOutName = planDay.exercises[swapTargetIndex].name;
@@ -793,6 +1041,7 @@ export default function WorkoutScreen() {
       primaryMuscle: selected.primaryMuscle,
       equipment: selected.equipment,
       imageUrl: selected.imageUrl,
+      emphasis: selected.emphasis,
     };
     const newExercises = [...planDay.exercises];
     newExercises[swapTargetIndex] = swapped;
@@ -801,6 +1050,11 @@ export default function WorkoutScreen() {
     setSwapModalVisible(false);
     // Durable echo: stick this swap across the rest of the block.
     void persistSwapToPlan(planDay.workoutType, swapOutName, selected);
+    // If the swapped-in lift wasn't in the initial batch fetch, pull its
+    // history on demand so the Coach's Call hero can render on it.
+    if (!lastWeights[normalizeExName(selected.name)]) {
+      void fetchSingleLiftHistory(selected.name);
+    }
   };
 
   const openAddExercise = () => {
@@ -827,9 +1081,16 @@ export default function WorkoutScreen() {
       primaryMuscle: selected.primaryMuscle,
       equipment: selected.equipment,
       imageUrl: selected.imageUrl,
+      emphasis: selected.emphasis,
     };
     setPlanDay({ ...planDay, exercises: [...planDay.exercises, appended] });
     setAddExerciseModalVisible(false);
+    // Same on-demand fetch as the swap paths — an appended lift is
+    // structurally the same "new name that wasn't in the batch fetch"
+    // problem for the Coach's Call hero.
+    if (!lastWeights[normalizeExName(selected.name)]) {
+      void fetchSingleLiftHistory(selected.name);
+    }
   };
 
   const addSetToTarget = (targetName: string) => {
@@ -897,6 +1158,7 @@ export default function WorkoutScreen() {
       primaryMuscle: selected.primaryMuscle,
       equipment: selected.equipment,
       imageUrl: selected.imageUrl,
+      emphasis: selected.emphasis,
     };
     const updated = [...workout];
     updated[exIndex] = swapped;
@@ -904,6 +1166,11 @@ export default function WorkoutScreen() {
     setSwapModalVisible(false);
     // Durable echo: stick this swap across the rest of the block.
     void persistSwapToPlan(planDay?.workoutType, swapOutName, selected);
+    // On-demand history fetch — see fetchSingleLiftHistory + pre-screen
+    // confirmPreScreenSwap for the paired call. Same rationale.
+    if (!lastWeights[normalizeExName(selected.name)]) {
+      void fetchSingleLiftHistory(selected.name);
+    }
   };
 
   const currentEx = workout[exIndex];
@@ -912,26 +1179,31 @@ export default function WorkoutScreen() {
     setShowMuscleDetails(false);
     setWeightPhaseForEx(exIndex);
     // Pre-fill with the prescription if we have one — that's the coach
-    // actually doing the math. Falls back to last logged weight, then to a
-    // conservative starting-strength SEED on the cold-start path (no history
-    // yet) so the user never stares at a blank box on session 1. The seed
-    // returns null whenever it can't be honest about the number (bodyweight
-    // unknown, lift isn't a recognised compound) — that case stays blank,
-    // which is the calibration entry the UI labels as "find your numbers".
+    // actually doing the math. Falls back to last logged weight (which
+    // includes an onboarding anchor seed, if one exists for this lift —
+    // see src/lib/anchorSeed.ts). If NEITHER exists, fall back to a
+    // same-session anchor-derived ESTIMATE (src/lib/anchorDerivation.ts) —
+    // e.g. Incline Bench derived from the user's seeded Flat Bench. Only
+    // when the lift isn't in the derivation map either (or its anchor was
+    // never entered) does the box stay blank, matching the Coach's Call's
+    // "first time on this — we'll find your weight as you go" line. This
+    // replaces the removed bodyweight-derived guess, which contradicted
+    // that line and produced nonsensical numbers for lifts the user hadn't
+    // actually told us about — every number here traces back to something
+    // the user typed, never a demographic average.
     const exName = workout[exIndex]?.name;
     const rx = exName ? prescriptions[exName] : undefined;
-    const last = exName ? lastWeights[exName]?.weight : undefined;
+    const last = exName ? lastWeights[normalizeExName(exName)]?.weight : undefined;
     let seed: number | undefined = rx ? rx.suggestedWeightKg : last;
-    if (seed === undefined && exName && fitnessLevel) {
-      const startSeed = estimateStartingLoad({
-        level: fitnessLevel,
-        bodyweightKg,
-        sex,
-        liftName: exName,
-      });
-      if (startSeed != null) seed = startSeed;
+    if (seed === undefined && exName) {
+      const derived = deriveFromAnchors({ exerciseName: exName, anchorWorkingWeights });
+      if (derived != null) seed = derived;
     }
     setCurrentWeightInput(seed !== undefined ? String(seed) : '');
+
+    // Reps prefill is gone with the reps-logging cut — no user input, so
+    // there's nothing to seed. The RIR commit path computes the midpoint
+    // from the plan's rep string at write time (see commitWithRir).
 
     // RIR is intentionally NOT seeded here. The legacy behavior pre-selected
     // 'Solid' (RIR=2) so every set logged a value, but the resulting capture
@@ -950,7 +1222,7 @@ export default function WorkoutScreen() {
         delta_pct: rx.deltaPct,
         rationale: rx.rationale,
         cause: rx.cause,
-        last_weight_kg: lastWeights[exName]?.weight ?? rx.suggestedWeightKg,
+        last_weight_kg: lastWeights[normalizeExName(exName)]?.weight ?? rx.suggestedWeightKg,
         energy_score: energyScore,
       };
       setShownPrescriptions(prev => ({ ...prev, [exName]: snapshot }));
@@ -1013,6 +1285,25 @@ export default function WorkoutScreen() {
         rirLogRef.current = next;
         setRirLog(next);
       }
+      // Reps AUTO-FILL — no user input; the value is the rounded midpoint
+      // of the plan's rep range (see midpointFromReps). Written to
+      // exercise_logs.reps for history / display; never read back into
+      // prescribeLoad. Same sync-ref-then-state pattern as RIR so
+      // finishWorkout on the last exercise reads the freshest value.
+      const planReps = workout[weightPhaseForEx!]?.reps;
+      const midpoint = midpointFromReps(planReps);
+      if (typeof midpoint === 'number') {
+        const next = { ...repsLogRef.current, [exName]: midpoint };
+        repsLogRef.current = next;
+        setRepsLog(next);
+      } else {
+        // Unparseable plan rep spec (e.g. "30-60s"): log null; no history
+        // entry is better than a fabricated one.
+        const next = { ...repsLogRef.current };
+        delete next[exName];
+        repsLogRef.current = next;
+        setRepsLog(next);
+      }
     }
     handleWeightLog();
   };
@@ -1027,6 +1318,12 @@ export default function WorkoutScreen() {
       delete next[exName];
       rirLogRef.current = next;
       setRirLog(next);
+    }
+    if (exName && repsLogRef.current[exName] !== undefined) {
+      const next = { ...repsLogRef.current };
+      delete next[exName];
+      repsLogRef.current = next;
+      setRepsLog(next);
     }
     setCurrentWeightInput('');
     setWeightPhaseForEx(null);
@@ -1064,8 +1361,10 @@ export default function WorkoutScreen() {
       // from this abandoned attempt.
       weightLogRef.current = {};
       rirLogRef.current = {};
+      repsLogRef.current = {};
       setWeightLog({});
       setRirLog({});
+      setRepsLog({});
     } catch (e) {
       reportSilent(e, 'workout:confirmAbandon:clear');
     }
@@ -1175,6 +1474,10 @@ export default function WorkoutScreen() {
           // Read from the ref, not state — see commitWithRir for why the
           // ref is the synchronous source of truth on the last-set commit.
           reps_in_reserve: rirLogRef.current[exerciseName] ?? null,
+          // Best-set reps. Null when the user cleared the prefilled target
+          // and didn't type anything else — the top-of-band gate in
+          // loadPrescription treats null as "no history to gate on."
+          reps: repsLogRef.current[exerciseName] ?? null,
         }));
 
       save = {
@@ -1197,6 +1500,29 @@ export default function WorkoutScreen() {
         logRows,
         queuedAt: new Date().toISOString(),
       };
+
+      // ── OPTIMISTIC PHASE TRANSITION ───────────────────────────────────
+      // Everything the summary needs from in-memory state is now built
+      // (workout, energyScore, weightLogRef ref reads happened above at
+      // committedWeights). The remaining work — durable save, prior-log
+      // fetch, PR detection, analytics, coach recap — feeds state that
+      // the already-rendered summary re-reads on its own:
+      //   • syncFailed → the "Couldn't sync" badge, set by the outer
+      //     catch or the per-phase reportSilent path.
+      //   • newPRs / prWeights → the PR celebration cards, set once
+      //     computeSessionPrs settles.
+      //   • prCheckPending → the "Checking for PRs…" placeholder,
+      //     cleared alongside those PR writes.
+      // Flipping phase here removes the 3–4s blank-screen delay the
+      // user used to sit through while the network round-trips
+      // finished; nothing here changes WHAT gets persisted, only WHEN
+      // the UI flips.
+      setPrCheckPending(true);
+      setPhase('complete');
+      Animated.parallel([
+        Animated.spring(logoScale, { toValue: 1.2, friction: 4, tension: 5, useNativeDriver: true }),
+        Animated.timing(logoGlow, { toValue: 1, duration: 1000, useNativeDriver: true }),
+      ]).start();
 
       // ── Phase 3: Durable save FIRST, then best-effort PR fetch ────────
       // runFinishPersistence runs the save before the prior-log read and
@@ -1263,7 +1589,9 @@ export default function WorkoutScreen() {
             logged_weight_kg: row.weight_kg,
             followed: wasFollowed(rx.suggested_weight_kg, row.weight_kg),
             rir_logged: rir,
-            hit_target_zone: hitTargetZone(rir),
+            // Goal-aware target zone: strength (2-3), muscle (0-2), general (1-2).
+            // Analytics event now reflects the lane, not a single universal window.
+            hit_target_zone: hitTargetZone(rir, goal),
             rationale: rx.rationale,
             energy_score: rx.energy_score,
           });
@@ -1294,6 +1622,11 @@ export default function WorkoutScreen() {
           reportSilent(e, 'workout:finish:prDetection');
         }
       }
+      // PR check has settled (either populated newPRs or ran a no-op
+      // against zero logRows / a fetch error). Clear the "Checking for
+      // PRs…" placeholder — from here on, the summary card shows
+      // whatever PR cards exist, or nothing.
+      setPrCheckPending(false);
 
       // ── Phase 5b: PR coach messages (top 1-2 by absolute jump) ────────
       // Routes through the BRAIN (buildSessionPr → Observation) and the
@@ -1376,6 +1709,10 @@ export default function WorkoutScreen() {
         catch (e2) { reportSilent(e2, 'workout:finish:lastResortEnqueue'); }
         setSyncFailed(true);
       }
+      // If we optimistically flipped to 'complete' before the throw, the
+      // "Checking for PRs…" placeholder is still up. Clear it — the PR
+      // pipeline crashed, and there's nothing else coming.
+      setPrCheckPending(false);
     }
 
     // ── Coach recap (best-effort, never blocks) ─────────────────────────
@@ -1508,11 +1845,11 @@ export default function WorkoutScreen() {
       reportSilent(e, 'workout:recapWrapper');
     }
 
-    setPhase('complete');
-    Animated.parallel([
-      Animated.spring(logoScale, { toValue: 1.2, friction: 4, tension: 5, useNativeDriver: true }),
-      Animated.timing(logoGlow, { toValue: 1, duration: 1000, useNativeDriver: true })
-    ]).start();
+    // NOTE. The phase→'complete' flip + logo animation moved UP inside
+    // the try block, immediately after the synchronous save build. See
+    // the "OPTIMISTIC PHASE TRANSITION" block. Everything below —
+    // durable save, PR detection, analytics, coach recap — now runs
+    // while the user is already looking at the summary card.
   };
 
   const goHome = () => {
@@ -1544,6 +1881,11 @@ export default function WorkoutScreen() {
         fitnessLevel: fitnessLevel ?? 'beginner',
         blockIndex: blockWeek ? Math.floor((blockWeek - 1) / 4) : 0,
         startDate: todayStr,
+        // Ad-hoc "Train anyway" inherits the user's lane so the emergency
+        // session is dosed identically to the planned one. Fall through to
+        // catalog when we haven't finished loading the profile yet (rare —
+        // the pre-workout screen usually mounts first).
+        goal,
       });
       if (!day || !day.exercises || day.exercises.length === 0) {
         // Generation produced nothing usable — leave the user on the error
@@ -1869,7 +2211,25 @@ export default function WorkoutScreen() {
           <Text style={[styles.sessionHeader, { color: colors.textMuted }]}>TODAY'S SESSION</Text>
           <View style={styles.sessionList}>
             {effectiveExercises.map((ex, idx) => {
-              const hint = coachHints[ex.name] ?? '';
+              // Suppress the pre-screen "Coach: {calibrating}" line when
+              // the ACTIVE card's Coach's Call hero will carry the same
+              // cold-start message for this lift. Product rule: a first-
+              // timer should see exactly one cold-start message across
+              // the flow. Bodyweight rows and lifts with history keep the
+              // hint (the hero handles bodyweight by suppressing itself,
+              // and history lifts get the real prescription line here).
+              // Mirrors shouldShowCoachCall's cold-start branch:
+              // non-bodyweight + rx null + lastKg falsy + historyLoad ready.
+              const equipmentLc = (ex.equipment ?? '').toLowerCase().trim();
+              const key = normalizeExName(ex.name);
+              const rowRx = prescriptions[ex.name];
+              const rowLastKg = lastWeights[key]?.weight;
+              const heroWillCarryColdStart =
+                equipmentLc !== 'bodyweight' &&
+                rowRx == null &&
+                (rowLastKg == null || rowLastKg <= 0) &&
+                historyLoad === 'ready';
+              const hint = heroWillCarryColdStart ? '' : (coachHints[ex.name] ?? '');
               return (
                 <View key={`${ex.name}-${idx}`} style={styles.sessionRow}>
                   <View style={{ flex: 1 }}>
@@ -1881,11 +2241,16 @@ export default function WorkoutScreen() {
                         coach line composes (last weight, energy band,
                         suggested) PLUS the "Week N on this lift — chase
                         one more rep than last time." block-week suffix;
-                        two lines clip the tail. */}
-                    <Text style={styles.sessionHint} numberOfLines={4}>
-                      <Text style={{ color: colors.accentTeal }}>Coach: </Text>
-                      {hint}
-                    </Text>
+                        two lines clip the tail. Empty hint (cold-start
+                        rows on the pre-screen) renders no line at all —
+                        the hero on the active card is the single voice
+                        for that path. */}
+                    {hint ? (
+                      <Text style={styles.sessionHint} numberOfLines={4}>
+                        <Text style={{ color: colors.accentTeal }}>Coach: </Text>
+                        {hint}
+                      </Text>
+                    ) : null}
                   </View>
                   <TouchableOpacity
                     style={styles.swapIconBtn}
@@ -2092,15 +2457,21 @@ export default function WorkoutScreen() {
               </View>
             </View>
 
-            {/* PR celebration cards */}
-            {newPRs.length > 0 && (
+            {/* PR celebration cards. While the prior-log fetch + detection
+                are still resolving after the optimistic phase flip, we
+                show a subtle inline placeholder instead of a blank spot —
+                so the user has an honest cue that PR celebrations may
+                still arrive a beat later. `newPRs.length > 0` supersedes
+                the placeholder the moment detection lands with results;
+                a truly PR-less session shows nothing (existing behaviour). */}
+            {newPRs.length > 0 ? (
               <View style={{ marginTop: layout.spacing.md, gap: 8 }}>
                 {newPRs.map(pr => {
                   // Committed logged weight — the exact number persisted to
                   // exercise_logs (snapshotted from logRows in Phase 5), not
                   // a weightLog lookup that can be stale or name-mismatched.
                   const newWeight = prWeights[pr] ?? NaN;
-                  const prev = lastWeights[pr]?.weight;
+                  const prev = lastWeights[normalizeExName(pr)]?.weight;
                   const delta = !isNaN(newWeight) && prev !== undefined ? newWeight - prev : null;
                   return (
                     <View key={pr} style={styles.prCard}>
@@ -2119,7 +2490,34 @@ export default function WorkoutScreen() {
                   );
                 })}
               </View>
-            )}
+            ) : prCheckPending ? (
+              <View
+                style={{
+                  marginTop: layout.spacing.md,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: layout.spacing.xs,
+                  paddingHorizontal: layout.spacing.md,
+                }}
+                accessibilityRole="progressbar"
+                accessibilityLabel="Checking for personal records"
+              >
+                <ActivityIndicator
+                  size="small"
+                  color={colors.textMuted}
+                />
+                <Text
+                  style={{
+                    fontFamily: typography.family.body,
+                    fontSize: typography.size.s12,
+                    color: colors.textMuted,
+                    letterSpacing: 0.4,
+                  }}
+                >
+                  Checking for PRs…
+                </Text>
+              </View>
+            ) : null}
 
             {/* Exercise summary */}
             <View style={{ marginTop: layout.spacing.md }}>
@@ -2246,7 +2644,7 @@ export default function WorkoutScreen() {
         const currentEx = workout[weightPhaseForEx];
         const exName = currentEx.name;
         const isBodyweight = (currentEx.equipment ?? '').toLowerCase() === 'bodyweight';
-        const lastEntry = lastWeights[exName];
+        const lastEntry = lastWeights[normalizeExName(exName)];
         const last = lastEntry?.weight;
         // Note: the "N days ago" label and lastDate were used by the
         // popup's LAST display; that's been moved to the exercise view
@@ -2327,17 +2725,6 @@ export default function WorkoutScreen() {
                     THIS SESSION
                   </Text>
 
-                  {/* Cold-start label: when there is NO prior log AND no
-                      prescription, the seed in the input came from
-                      estimateStartingLoad (a conservative guess from
-                      bodyweight). Be explicit about that so the user reads
-                      the number as a starting point, not a prescription. */}
-                  {last === undefined && !prescriptions[exName] && currentWeightInput.trim() !== '' && (
-                    <Text style={[styles.weightLabel, { color: colors.accentTeal, marginBottom: layout.spacing.sm, textTransform: 'none', letterSpacing: 0 }]}>
-                      Starting guess — find a set with about 2 reps left, then rate it.
-                    </Text>
-                  )}
-
                   <TextInput
                     style={[
                       styles.weightInputRedesign,
@@ -2377,6 +2764,14 @@ export default function WorkoutScreen() {
                       the active exercise card BEFORE the set, where it can
                       actually inform the load instead of arriving after
                       the user already picked a weight. */}
+
+                  {/* Reps prompt used to live here. Removed in the reps-
+                      logging product cut: we no longer ask the user for
+                      reps performed — the plan already prescribes a range,
+                      so exercise_logs.reps is auto-populated with the
+                      midpoint of that range at commit time (see
+                      midpointFromReps + commitWithRir). The RIR chip below
+                      is now the only post-set interaction. */}
 
                   {/* RIR capture — single tap commits the set. Each chip
                       records weight + RIR and advances; tapping a chip IS
@@ -2638,7 +3033,7 @@ export default function WorkoutScreen() {
             nothing when there's no history (no dangling "Last:" label).
             Data comes from lastWeights, populated in fetchTodayPlan. */}
         {(() => {
-          const last = lastWeights[currentEx.name];
+          const last = lastWeights[normalizeExName(currentEx.name)];
           if (!last || !last.weight) return null;
           const ago = formatLastUsedAgo(last.date);
           return (
@@ -2657,21 +3052,59 @@ export default function WorkoutScreen() {
             cause) lives here, where it can actually inform the load. */}
         {(() => {
           const exName = currentEx.name;
-          const lastKg = lastWeights[exName]?.weight;
+          const key = normalizeExName(exName);
+          const lastKg = lastWeights[key]?.weight;
           const rx = prescriptions[exName];
-          // Bodyweight lifts don't run through the prescription engine —
-          // their coachHints line carries form cues instead. Skip the
-          // hero so we don't show a dead "calibrating" block on every
-          // bodyweight set.
-          if ((currentEx.equipment ?? '').toLowerCase() === 'bodyweight') return null;
-          // Cold start with no rx AND no history is rendered as the
-          // "calibrating" line lower down (coachHints) — no point in a
-          // second, content-free hero block above it.
-          if (!rx && !lastKg) return null;
+          // Render guard for the Coach's Call hero — extracted to
+          // src/lib/coachCall.ts so the decision table is unit-tested.
+          // `historyLoad` matters here: the product wants the hero on
+          // first-time exercises too (cold-start branch), but ONLY once
+          // we're sure the user is a cold-starter. While the initial
+          // exercise_logs fetch is still 'loading' or 'error', we
+          // suppress — otherwise a cold message would flash and get
+          // replaced the moment history lands.
+          if (!shouldShowCoachCall({
+            equipment: currentEx.equipment,
+            rx,
+            lastKg,
+            historyLoad,
+          })) return null;
+          // "Based on your 100×5" attribution — ONLY while the onboarding
+          // seed is still this lift's entire history. exerciseHistory[key]
+          // is the last-6-DESC log list from the same fetch that built
+          // lastWeights; a single entry whose date matches the cached
+          // seed's logged_date means no real session has been logged for
+          // this lift yet. The moment session one is logged, a second
+          // entry appears and this collapses to undefined — "one line, at
+          // that moment only," per spec.
+          const seedNote = anchorSeedNotes[key];
+          const historyForLift = exerciseHistory[key];
+          const anchorSeed =
+            seedNote && historyForLift?.length === 1 && historyForLift[0].date === seedNote.loggedDate
+              ? { weightKg: seedNote.enteredWeightKg, reps: seedNote.enteredReps }
+              : null;
+          // Anchor-derived ESTIMATE — only relevant on the true cold-start
+          // path (no rx, no lastKg): a DIFFERENT lift than any anchor, but
+          // one src/lib/anchorDerivation.ts can estimate from what the
+          // user told us about a related anchor lift. Mutually exclusive
+          // with anchorSeed above (that's for the anchor exercise ITSELF;
+          // deriveFromAnchors excludes the five anchor exercises from its
+          // map, so it naturally returns null for them). null whenever the
+          // anchor is missing/unlogged or the exercise isn't in the map —
+          // the hero then falls back to the bare calibration line.
+          const derivedEstimate = (!rx && !lastKg)
+            ? (() => {
+                const weightKg = deriveFromAnchors({ exerciseName: exName, anchorWorkingWeights });
+                if (weightKg == null) return null;
+                const basis = basisForExercise(exName);
+                if (!basis) return null;
+                return { weightKg, basisLabel: ANCHOR_BASIS_LABEL[basis] };
+              })()
+            : null;
           const hero = buildPrescriptionHero({
             rx,
             lastWeightKg: lastKg,
-            hasLastRir: lastWeights[exName]?.rir != null,
+            hasLastRir: lastWeights[key]?.rir != null,
             // Energy modulates the hold/low_energy branches. The
             // presenter weaves the kg into the reason directly, so the
             // single sentence here replaces both the old separate
@@ -2679,6 +3112,8 @@ export default function WorkoutScreen() {
             // micro-line (energy banner). The active card now renders
             // ONE coach block, not three.
             energyScore,
+            anchorSeed,
+            derivedEstimate,
           });
           const accent =
             hero.tone === 'progress' ? colors.accentTeal :
@@ -2744,7 +3179,10 @@ export default function WorkoutScreen() {
         {/* Expandable muscle details card */}
         {showMuscleDetails && getMuscleInfo(currentEx.primaryMuscle) && (
           <View style={[styles.muscleDetailsCard, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
-            <MuscleDetails muscle={currentEx.primaryMuscle} />
+            <MuscleDetails
+              muscle={currentEx.primaryMuscle}
+              emphasis={currentEx.emphasis}
+            />
           </View>
         )}
 
@@ -3611,6 +4049,8 @@ function makeStyles(colors: any) {
       gap: 6,
       marginBottom: layout.spacing.md,
     },
+    // (Reps stepper styles removed with the reps-logging cut; midpoint
+    // auto-fill happens in commitWithRir without any UI.)
     rirChipBig: {
       flex: 1,
       paddingVertical: 12,

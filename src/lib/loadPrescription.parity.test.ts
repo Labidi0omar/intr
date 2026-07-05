@@ -26,6 +26,16 @@ const ENERGY: number[] = [1, 3, 5];
 const COMPOUND: boolean[] = [true, false];
 const LEVELS: (PrescriptionInput['fitnessLevel'])[] = ['beginner', 'intermediate', undefined];
 const WEIGHTS: number[] = [0, 20, 100];
+// v2 axes — goal-aware ladder + calibration damper + top-of-band gate.
+// Sampled sparingly (2-3 values each) to keep the cell count manageable
+// while still catching drift on the new branches.
+const GOALS: PrescriptionInput['goal'][] = ['strength', 'muscle', 'general', undefined];
+const SESSION_COUNTS: (number | undefined)[] = [undefined, 0, 5];
+const REP_BANDS: { lastReps: number | undefined; topReps: number | undefined }[] = [
+  { lastReps: undefined, topReps: undefined },
+  { lastReps: 8,  topReps: 12 },   // gate active, below top
+  { lastReps: 12, topReps: 12 },   // gate active, at top
+];
 
 describe('parity: prescribeLoad RN vs Deno', () => {
   it('produces identical output across the full input grid', () => {
@@ -36,28 +46,36 @@ describe('parity: prescribeLoad RN vs Deno', () => {
         for (const energyScore of ENERGY) {
           for (const isCompound of COMPOUND) {
             for (const fitnessLevel of LEVELS) {
-              cells++;
-              const input: PrescriptionInput = {
-                lastWeightKg, lastRir, energyScore, isCompound, fitnessLevel,
-              };
-              const a = prescribeLoadRN(input);
-              const b = prescribeLoadDeno(input);
-              if (
-                a.suggestedWeightKg !== b.suggestedWeightKg ||
-                a.deltaPct !== b.deltaPct ||
-                a.rationale !== b.rationale
-              ) {
-                mismatches.push(
-                  `input=${JSON.stringify(input)} RN=${JSON.stringify(a)} Deno=${JSON.stringify(b)}`,
-                );
+              for (const goal of GOALS) {
+                for (const sessionCountForLift of SESSION_COUNTS) {
+                  for (const { lastReps, topReps } of REP_BANDS) {
+                    cells++;
+                    const input: PrescriptionInput = {
+                      lastWeightKg, lastRir, energyScore, isCompound, fitnessLevel,
+                      goal, sessionCountForLift, lastReps, topReps,
+                    };
+                    const a = prescribeLoadRN(input);
+                    const b = prescribeLoadDeno(input);
+                    if (
+                      a.suggestedWeightKg !== b.suggestedWeightKg ||
+                      a.deltaPct !== b.deltaPct ||
+                      a.rationale !== b.rationale
+                    ) {
+                      mismatches.push(
+                        `input=${JSON.stringify(input)} RN=${JSON.stringify(a)} Deno=${JSON.stringify(b)}`,
+                      );
+                    }
+                  }
+                }
               }
             }
           }
         }
       }
     }
-    // Grid sanity: 3 weights × 5 RIRs × 3 energies × 2 compounds × 3 levels = 270.
-    expect(cells).toBe(270);
+    // Grid sanity: 3 weights × 5 RIRs × 3 energies × 2 compounds × 3 levels
+    // × 4 goals × 3 session counts × 3 rep bands = 9720.
+    expect(cells).toBe(9720);
     if (mismatches.length > 0) {
       // Fail loudly with the first few divergences so the cause is obvious.
       throw new Error(

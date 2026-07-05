@@ -69,7 +69,7 @@ import {
 import { phraseObservation, dedupKeyFor, factSigFromDedupKey } from '../../src/lib/coachVoice';
 import { computeEffortZoneFromLogs, parseWeightKg } from '../../src/utils/dashboardStats';
 import { track } from '../../src/lib/analytics';
-import { CURRENT_PLAN_VERSION, type SplitId } from '../../src/lib/planGeneration';
+import { CURRENT_PLAN_VERSION, nextRotationPhase, type SplitId } from '../../src/lib/planGeneration';
 import {
   CALIBRATION_SESSIONS_NEEDED,
   computeCalibration,
@@ -1235,17 +1235,34 @@ export default function HomeScreen() {
       const now = new Date();
       const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
+      // Diagnostic for the resume-rotation bug: the raw lifetime
+      // completedCount, the last completed session's workout_type, and the
+      // type the catch-up pack actually starts on today. Populated below
+      // (only when there's a backlog to resolve) and attached to the
+      // replan_accepted event so we can confirm on-device whether
+      // completedCount was reading 0.
+      let gapDiagnostic: {
+        completedCount: number;
+        lastCompletedWorkoutType: string | null;
+        nextWorkoutType: string | null;
+      } | null = null;
+
       // Both actions go through the SAME generator-based forward build
       // (buildCatchUpRows). They differ only in:
       //
       //   resume → backlogN = M_missed,
-      //            mesocyclePosition = mesocyclePosition  (make up the misses
+      //            mesocyclePosition = rotationBase  (make up the misses
       //            back-to-back, then return to cadence)
       //
       //   skip   → backlogN = 0,
-      //            mesocyclePosition = mesocyclePosition + M_missed  (advance
+      //            mesocyclePosition = rotationBase + M_missed  (advance
       //            past the missed sessions; today = the canonical NEXT
       //            session after them, on normal cadence)
+      //
+      // rotationBase is the TRUE rotation phase — derived from the most
+      // recently completed session's workout_type (nextRotationPhase),
+      // not the lifetime completed-session count. The count is only a
+      // fallback for true cold start (see rotationBase below).
       //
       // Either way, the block/deload position and the user's accumulated
       // mesocycle progress are preserved — skip does NOT restart the plan.
@@ -1273,7 +1290,7 @@ export default function HomeScreen() {
         // dates for the SAME window (a completions window narrower than the
         // plan survey makes old completed days look "missed" and inflates
         // the backlog) + profile inputs + the mesocycle anchor.
-        const [surveyRowsRes, completedRes, profileRes, anchorRowRes, totalCompletedRes, priorPlansRes] = await Promise.all([
+        const [surveyRowsRes, completedRes, profileRes, anchorRowRes, totalCompletedRes, priorPlansRes, lastCompletedRes] = await Promise.all([
           supabase
             .from('weekly_plans')
             .select('plan, week_start')
@@ -1291,7 +1308,7 @@ export default function HomeScreen() {
             .lte('planned_date', todayStr),
           supabase
             .from('profiles')
-            .select('training_days, preferred_split, fitness_level, training_weekdays')
+            .select('training_days, preferred_split, fitness_level, training_weekdays, goal')
             .eq('id', user.id)
             .maybeSingle(),
           supabase
@@ -1301,10 +1318,13 @@ export default function HomeScreen() {
             .order('week_start', { ascending: true })
             .limit(1)
             .maybeSingle(),
-          // mesocyclePosition = count of completed non-recovery sessions
-          // ever. This is the rotation phase to pass to generatePlan.
-          // The PPL "you missed legs → next is push" property holds as
-          // long as the count reflects what the rotation expects.
+          // FALLBACK ONLY: count of completed non-recovery sessions ever.
+          // A raw lifetime count is a fragile proxy for rotation position —
+          // it drifts on any ad-hoc session, split change, or un-counted
+          // completion, and lands on dayTypes[0] (chest, for bro_split)
+          // whenever it happens to be a multiple of dayTypes.length. Used
+          // only when lastCompletedRes below has no row (true cold start)
+          // or its workout_type doesn't map onto the resolved split.
           supabase
             .from('workout_sessions')
             .select('id', { count: 'exact', head: true })
@@ -1318,6 +1338,20 @@ export default function HomeScreen() {
             .lt('week_start', todayStr)
             .order('week_start', { ascending: false })
             .limit(4),
+          // The actual rotation source of truth: the most recent completed
+          // non-recovery session's workout_type. nextRotationPhase maps this
+          // straight to the phase for the NEXT session (lastTypeIndex + 1),
+          // which is exact regardless of what the lifetime count reads.
+          supabase
+            .from('workout_sessions')
+            .select('workout_type, planned_date')
+            .eq('user_id', user.id)
+            .eq('completed', true)
+            .eq('is_recovery', false)
+            .order('planned_date', { ascending: false })
+            .order('completed_at', { ascending: false })
+            .limit(1)
+            .maybeSingle(),
         ]);
 
       const surveyRows = (surveyRowsRes.data ?? []) as Array<{ plan: any; week_start: string }>;
@@ -1344,7 +1378,7 @@ export default function HomeScreen() {
       );
 
       if (missedCount > 0) {
-        const profile = profileRes.data as { training_days: number | null; preferred_split: string | null; fitness_level: string | null; training_weekdays: number[] | null } | null;
+        const profile = profileRes.data as { training_days: number | null; preferred_split: string | null; fitness_level: string | null; training_weekdays: number[] | null; goal: string | null } | null;
         const trainingDays = (profile?.training_days && profile.training_days > 0)
           ? profile.training_days
           : 3;
@@ -1373,6 +1407,21 @@ export default function HomeScreen() {
 
         const completedCount = (totalCompletedRes as any).count ?? 0;
 
+        // True rotation position: map the most recent completed session's
+        // workout_type onto the resolved split's dayTypes and take the NEXT
+        // phase (lastTypeIndex + 1). Falls back to the raw lifetime count
+        // only when there's no last completed session (true cold start) or
+        // its type doesn't belong to the current split (split change,
+        // ad-hoc workout) — see nextRotationPhase's doc comment.
+        const lastCompletedWorkoutType =
+          (lastCompletedRes.data as { workout_type: string | null } | null)?.workout_type ?? null;
+        const resolvedPhase = nextRotationPhase({
+          split: (profile?.preferred_split ?? undefined) as SplitId | undefined,
+          trainingDays,
+          lastWorkoutType: lastCompletedWorkoutType,
+        });
+        const rotationBase = resolvedPhase ?? completedCount;
+
         // Plan history (last 4 weeks before today) for the generator's
         // variety scoring. Stored as { exercises: string[] }.
         const planHistory = (priorPlansRes.data ?? []).map((row: any) => {
@@ -1393,8 +1442,16 @@ export default function HomeScreen() {
         // generator, different (backlogN, mesocyclePosition) inputs.
         const backlogN = action === 'resume' ? missedCount : 0;
         const mesocyclePosition = action === 'resume'
-          ? completedCount
-          : completedCount + missedCount;
+          ? rotationBase
+          : rotationBase + missedCount;
+
+        // Keep the user's training goal on resume/skip so the catch-up pack
+        // is dosed on the correct lane. Fall back to 'general' (blended
+        // default) when the profile has no pick — matches ensureCurrentWeekPlan.
+        const goalForCatchUp: 'strength' | 'muscle' | 'general' =
+          profile?.goal === 'strength' || profile?.goal === 'muscle' || profile?.goal === 'general'
+            ? profile.goal
+            : 'general';
 
         const { rows: catchUpRows } = buildCatchUpRows({
           todayIso: todayStr,
@@ -1406,6 +1463,7 @@ export default function HomeScreen() {
           // Keep the user's explicit split on resume/skip (resolveSplit in the
           // generator guards an invalid/legacy value).
           split: (profile?.preferred_split ?? undefined) as SplitId | undefined,
+          goal: goalForCatchUp,
           // Future segment of the resume pack lands on the user's chosen
           // weekdays. Catch-up segment stacks back-to-back by design.
           trainingWeekdays,
@@ -1418,6 +1476,15 @@ export default function HomeScreen() {
           // same calendar date to two workout types).
           gridAnchor: blockAnchor,
         });
+
+        const todaysDay = catchUpRows
+          .flatMap(row => row.planDays)
+          .find(d => d.date === todayStr);
+        gapDiagnostic = {
+          completedCount,
+          lastCompletedWorkoutType,
+          nextWorkoutType: todaysDay?.workoutType ?? null,
+        };
 
         // Clear-before-rewrite: delete any row whose [week_start,
         // week_start+6] window touches today or later — not just rows
@@ -1506,7 +1573,22 @@ export default function HomeScreen() {
       // skip = advance past on cadence). Both are an accept of the
       // catch-up prompt — the modal closing without a press would
       // be a drop, which the absence of this event reflects.
-      track('replan_accepted', { replan_action: action });
+      //
+      // gapDiagnostic (only set when missedCount > 0) rides along so we
+      // can confirm on-device whether the rotation-position bug — the
+      // lifetime completedCount reading 0/a multiple of dayTypes.length —
+      // is actually what's firing, and that the last-workout-type mapping
+      // resolved the intended next type.
+      track('replan_accepted', {
+        replan_action: action,
+        ...(gapDiagnostic
+          ? {
+              resume_completed_count: gapDiagnostic.completedCount,
+              resume_last_workout_type: gapDiagnostic.lastCompletedWorkoutType,
+              resume_next_workout_type: gapDiagnostic.nextWorkoutType,
+            }
+          : {}),
+      });
 
       setShowGapModal(false);
       fetchDashboardData();

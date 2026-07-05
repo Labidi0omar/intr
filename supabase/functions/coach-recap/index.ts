@@ -390,6 +390,22 @@ Baseline: "Recovery week. Go lighter on purpose — that's where the work sticks
 Good: "Recovery week. The gains from the last three weeks land now. Go light, move well."
 Good: "This is the easy week. It's not a skip — it's where the progress gets stored. Go light today."
 
+Observation: block_position:1, muscle lane — INTRO of the volume ramp
+Baseline: "Fresh block, week 1 of 4. Ease in — the sets climb over the next two weeks."
+Good: "Week 1 of 4. Lowest volume of the block by design — dial the reps in, the sets ramp from here."
+Good: "New block, easy entry. Today's the light end; volume climbs over the next two weeks."
+NOTE: On wk1 the sets are DELIBERATELY LOWER than they'll be at peak. Do NOT
+tell the user to "push harder" or "add a plate" — the point is a clean intro,
+volume will come.
+
+Observation: block_position:2, muscle lane — BUILD week
+Baseline: "Week 2 of 4 — volume's climbing. More sets today than last week. Keep the reps honest."
+Good: "Build week. Sets are up from last week — that's where the growth signal is. Reps clean."
+Good: "Week 2. More work than wk1 today. The extra sets earn next week's peak — don't skip them."
+NOTE: On wk2 the ADDED VOLUME IS THE PROGRESSION, not more weight. Never say
+"add a plate today" — the muscle lane climbs REPS AND SETS before load. The
+extra sets today are the whole point; loads stay steady.
+
 Observation: grinding, Bench stalled + low energy
 Baseline: "Bench stuck and you're tired. Today we hold the line, not chase it."
 Good: "Bench isn't moving and the tank's low. Don't grind harder — a light day here is the right call."
@@ -415,6 +431,25 @@ BAD rewrites (these would be rejected by the validator):
   - "Bench is at 80 kg and you should add weight." (contradicts the baseline's directive)
   - "Bench stuck at 90 kg."                        (invented number — 90 isn't in the facts)
   - "Bench hit a new high."                        (dropped the directive — pure description)
+
+GOAL LANE — the facts object may carry a "goal" field with one of three
+values. It signals the programming lane the client is running; match your
+voice to it:
+  - strength — heavy compound work, target RIR 1-3, load progresses only
+    when reps top the range cleanly. Language cues: "one in the tank,"
+    "clean top set," "own the bar." NEVER say "chase reps to failure" or
+    "push past the edge" — that's the wrong lane.
+  - muscle — hypertrophy focus, target RIR 0-2, volume climbs before load
+    (add a rep before a plate). Language cues: "add a rep," "last set to
+    the edge," "chase the top of the range." NEVER say "leave reps in the
+    tank" or "stay fresh" as a directive — the growth is at the edge.
+  - general — pass-through lane, no lane-specific dose changes. Keep the
+    voice generic ("train clean," "show up," "log the work"). Don't
+    invent lane cues — this user isn't running a specialized programme.
+    Same treatment when goal is absent.
+Never invent goal-specific directives the baseline doesn't imply — the
+baseline is the truth. This section is voice guidance, not a mandate to
+reshape the message.
 
 If a user name is supplied, use it OCCASIONALLY — not every line, maybe
 one in five. It should feel like a friend who knows your name, not a

@@ -51,7 +51,18 @@ export interface SafetyResult {
   ok: boolean;
   plan?: PlanDay;
   reason?: string;
+  /** Exercises the drop-guardrail had to restore because the LLM removed
+   *  them despite energy > 2 (or the minimum-count floor at energy 1–2).
+   *  Empty when the LLM behaved. Callers log this — repeated non-empty
+   *  values mean the model is misbehaving on drop rules and the prompt
+   *  needs another pass. */
+  restored?: string[];
 }
+
+/** Minimum exercise count when energy is very low (1–2). Below this the
+ *  session stops feeling like a workout — the drop guardrail refuses to
+ *  reduce a non-recovery day past this floor. */
+const MIN_EXERCISES_LOW_ENERGY = 3;
 
 /**
  * Validate + clamp Claude's adjusted plan against safety rules.
@@ -148,6 +159,76 @@ export function applyReplanSafety(raw: unknown, ctx: SafetyContext): SafetyResul
     return { ok: false, reason: 'no exercises survived safety filter' };
   }
 
+  // ── Drop guardrail (CODE-enforced, prompt-independent) ────────────────
+  // The system prompt tells the LLM "you may drop exercises if energy is
+  // very low (1–2)". Live traffic showed the model dropping exercises at
+  // energy 3–4 anyway (a user got 3 exercises on a 5–6 exercise day at
+  // energy 4). The prompt is not enough — enforce here.
+  //
+  // Rules:
+  //   • energy > 2 → NO exercise may be removed. Any exercise present in
+  //     ctx.original that the LLM cleaned out is RESTORED (LLM's other
+  //     edits — reps, weight — are kept for the exercises it kept).
+  //   • energy ≤ 2 → dropping is allowed BUT the resulting session must
+  //     keep at least MIN_EXERCISES_LOW_ENERGY exercises AND must always
+  //     preserve the first exercise from the original plan (the warm-up).
+  //     Missing entries are restored in original order until the floor is
+  //     met, warm-up first.
+  const energy = typeof ctx.energyScore === 'number' ? ctx.energyScore : 3;
+  const keptNames = new Set(cleanedExercises.map(e => e.name.trim().toLowerCase()));
+  const restored: string[] = [];
+
+  const restoreOne = (orig: PlanExercise): void => {
+    // Restore at the ORIGINAL index-order position so the session reads
+    // naturally (warm-up first, etc.). We rebuild the exercise from ctx.original
+    // rather than trusting LLM values for it — the LLM removed it, so it
+    // has no dose intent for the restored slot. Weight defaults to the last
+    // logged value when available, matching how the picker seeds a fresh
+    // prescription.
+    const last = ctx.lastWeights[orig.name];
+    const restoredEx: PlanExercise = {
+      name: orig.name,
+      sets: orig.sets,
+      reps: orig.reps,
+      restSeconds: orig.restSeconds,
+      primaryMuscle: orig.primaryMuscle,
+      equipment: orig.equipment,
+      imageUrl: orig.imageUrl,
+      ...(typeof last === 'number' && last > 0 ? { suggestedWeightKg: last } : {}),
+    };
+    // Splice back at the original's index to preserve session ordering.
+    const origIdx = ctx.original.exercises.findIndex(e => e.name === orig.name);
+    if (origIdx < 0 || origIdx >= cleanedExercises.length) {
+      cleanedExercises.push(restoredEx);
+    } else {
+      cleanedExercises.splice(origIdx, 0, restoredEx);
+    }
+    keptNames.add(orig.name.trim().toLowerCase());
+    restored.push(orig.name);
+  };
+
+  if (energy > 2) {
+    // Hard rule — restore every missing exercise.
+    for (const orig of ctx.original.exercises) {
+      if (!keptNames.has(orig.name.trim().toLowerCase())) restoreOne(orig);
+    }
+  } else {
+    // Energy 1–2: dropping allowed, but two floors apply.
+    // Floor A — warm-up (first exercise in original) must be present.
+    const warmup = ctx.original.exercises[0];
+    if (warmup && !keptNames.has(warmup.name.trim().toLowerCase())) {
+      restoreOne(warmup);
+    }
+    // Floor B — restore in original order until we hit the minimum count
+    // (or exhaust the original list — a plan with fewer than the floor to
+    // begin with can't be padded).
+    const minCount = Math.min(MIN_EXERCISES_LOW_ENERGY, ctx.original.exercises.length);
+    for (const orig of ctx.original.exercises) {
+      if (cleanedExercises.length >= minCount) break;
+      if (!keptNames.has(orig.name.trim().toLowerCase())) restoreOne(orig);
+    }
+  }
+
   return {
     ok: true,
     plan: {
@@ -157,6 +238,7 @@ export function applyReplanSafety(raw: unknown, ctx: SafetyContext): SafetyResul
       muscleGroups: ctx.original.muscleGroups,
       exercises: cleanedExercises,
     },
+    restored,
   };
 }
 

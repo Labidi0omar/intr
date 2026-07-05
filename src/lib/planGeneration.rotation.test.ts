@@ -13,7 +13,7 @@
 //     supplies the extra day(s) only when trainingDays > dayTypes.length.
 
 /// <reference types="node" />
-import { generatePlan } from './planGeneration';
+import { generatePlan, nextRotationPhase } from './planGeneration';
 
 const MONDAY = new Date(2026, 5, 1); // 2026-06-01 (Mon) — month is 0-indexed
 
@@ -195,5 +195,77 @@ describe('bro_split multi-week rotation', () => {
     expect(perWeek.map(d => d.workoutType)).toEqual(
       bulk.map(d => d.workoutType),
     );
+  });
+});
+
+// ── nextRotationPhase — deriving resume position from the last completed
+// session's workout_type, not a lifetime count ─────────────────────────
+//
+// Bug: ackGap('resume') used to pass a raw lifetime completed-session
+// COUNT straight through as dayIndexOffset. That count is a fragile proxy
+// for rotation position — it lands on dayTypes[0] (chest, for bro_split)
+// whenever it happens to be a multiple of dayTypes.length or reads 0, and
+// it drifts on any split change, ad-hoc session, or un-counted completion.
+// nextRotationPhase reads the ACTUAL last completed workout_type (as
+// stored on workout_sessions — the capitalized DAY_TYPE_LABELS value, e.g.
+// "Legs") and maps it to lastTypeIndex + 1, which is exact regardless of
+// how the count got there.
+
+describe('nextRotationPhase', () => {
+  it('bro_split: every type maps to the next type in the rotation (arms → legs)', () => {
+    // dayTypes = ['chest', 'back', 'shoulders', 'arms', 'legs'].
+    const cases: Array<[string, number]> = [
+      ['Chest', 1],
+      ['Back', 2],
+      ['Shoulders', 3],
+      ['Arms', 4],
+      ['Legs', 5],
+    ];
+    for (const [lastWorkoutType, expectedPhase] of cases) {
+      const phase = nextRotationPhase({ split: 'bro_split', trainingDays: 5, lastWorkoutType });
+      expect(phase).toBe(expectedPhase);
+    }
+  });
+
+  it('bro_split: Arms → phase 4 → dayTypes[4 % 5] = Legs, not a chest restart', () => {
+    const phase = nextRotationPhase({ split: 'bro_split', trainingDays: 5, lastWorkoutType: 'Arms' });
+    const dayTypes = ['chest', 'back', 'shoulders', 'arms', 'legs'];
+    expect(dayTypes[phase! % dayTypes.length]).toBe('legs');
+  });
+
+  it('bro_split: Legs (the last type) wraps back to Chest, not a null/overflow', () => {
+    const phase = nextRotationPhase({ split: 'bro_split', trainingDays: 5, lastWorkoutType: 'Legs' });
+    const dayTypes = ['chest', 'back', 'shoulders', 'arms', 'legs'];
+    expect(dayTypes[phase! % dayTypes.length]).toBe('chest');
+  });
+
+  it('PPL: preserves "missed legs → next is push" — Legs maps to the push phase', () => {
+    const phase = nextRotationPhase({ split: 'ppl', trainingDays: 3, lastWorkoutType: 'Legs' });
+    const dayTypes = ['push', 'pull', 'legs'];
+    expect(dayTypes[phase! % dayTypes.length]).toBe('push');
+  });
+
+  it('upper_lower: Lower maps to the upper phase (alternation continues)', () => {
+    const phase = nextRotationPhase({ split: 'upper_lower', trainingDays: 2, lastWorkoutType: 'Lower' });
+    const dayTypes = ['upper', 'lower'];
+    expect(dayTypes[phase! % dayTypes.length]).toBe('upper');
+  });
+
+  it('returns null when there is no last completed session (true cold start)', () => {
+    expect(nextRotationPhase({ split: 'bro_split', trainingDays: 5, lastWorkoutType: null })).toBeNull();
+    expect(nextRotationPhase({ split: 'bro_split', trainingDays: 5, lastWorkoutType: undefined })).toBeNull();
+  });
+
+  it('returns null when the type does not belong to the resolved split (split change / ad-hoc)', () => {
+    // "Upper" isn't a bro_split dayType — e.g. the user switched splits
+    // since that session. Callers fall back to the count-based phase.
+    expect(nextRotationPhase({ split: 'bro_split', trainingDays: 5, lastWorkoutType: 'Upper' })).toBeNull();
+  });
+
+  it('falls back to splitForDays when split is omitted, same as resolveSplit', () => {
+    // trainingDays=3 with no split → ppl. Legs → push phase.
+    const phase = nextRotationPhase({ trainingDays: 3, lastWorkoutType: 'Legs' });
+    const dayTypes = ['push', 'pull', 'legs'];
+    expect(dayTypes[phase! % dayTypes.length]).toBe('push');
   });
 });

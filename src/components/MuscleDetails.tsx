@@ -8,45 +8,60 @@
 //
 // The figure comes from react-native-body-highlighter — anatomically
 // correct front and back paths, so "BACK VIEW" actually shows a back
-// (and triceps highlight on the back of the arm, not the front).
+// (and triceps highlight on the back of the arm, not the front). When
+// the exercise carries an `emphasis` (see src/lib/muscleEmphasis.ts),
+// we hand off to MuscleOverlay which either delegates to the library's
+// native slug or overlays a custom sub-region path on top of the base
+// figure. When emphasis is unset, the render path is byte-for-byte the
+// pre-emphasis behavior (same <Body> shape, same slug lookup).
 
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import Body from 'react-native-body-highlighter';
 import { layout, typography } from '../theme';
 import { useTheme } from '../context/ThemeContext';
 import { getMuscleInfo } from '../constants/muscleInfo';
-import { reportSilent } from '../lib/errorReporting';
+import MuscleOverlay, { type MuscleHighlight } from './MuscleOverlay';
+import { emphasisToRender, type MuscleEmphasis } from '../lib/muscleEmphasis';
 
 interface MuscleDetailsProps {
   /** The exercise's primaryMuscle field (e.g. "chest", "back", "rear delts"). */
   muscle: string;
+  /** Optional sub-region emphasis from the exercise catalog. When set,
+   *  the figure highlights just this sub-region instead of the full
+   *  muscle slug. When unset, behavior is byte-for-byte the pre-emphasis
+   *  render — the native slug from muscleInfo. */
+  emphasis?: MuscleEmphasis;
 }
 
-export default function MuscleDetails({ muscle }: MuscleDetailsProps) {
+export default function MuscleDetails({ muscle, emphasis }: MuscleDetailsProps) {
   const { colors } = useTheme();
   const info = getMuscleInfo(muscle);
   if (!info) return null;
 
-  // Render guard for the muscle figure. If the lib ever throws (bad slug
-  // after a future upgrade, etc.) we still want the description text to
-  // appear — the figure is a nice-to-have, not load-bearing.
-  let figure: React.ReactNode = null;
-  if (info.slug) {
-    try {
-      figure = (
-        <Body
-          side={info.view}
-          scale={0.55}
-          border="none"
-          defaultFill={colors.surfaceElevated}
-          data={[{ slug: info.slug, color: colors.accentTeal }]}
-        />
-      );
-    } catch (e) {
-      reportSilent(e, 'MuscleDetails:body');
-    }
-  }
+  // Resolve the (view, highlight) pair. When the exercise has an
+  // emphasis it wins — for a rear-delt fly the view flips to 'back'
+  // even though the muscleInfo entry for 'shoulders' says 'front'. When
+  // there's no emphasis, we fall back to the pre-emphasis behavior:
+  // the view + slug from muscleInfo, exactly as before.
+  const rendered = emphasis ? emphasisToRender(emphasis) : null;
+  const view: 'front' | 'back' = rendered ? rendered.view : info.view;
+  const highlight: MuscleHighlight = rendered
+    ? rendered.kind === 'native'
+      ? { kind: 'native', slug: rendered.slug }
+      : { kind: 'overlay', pathId: rendered.pathId }
+    : info.slug
+      ? { kind: 'native', slug: info.slug }
+      : null;
+
+  const figure: React.ReactNode = (
+    <MuscleOverlay
+      view={view}
+      highlight={highlight}
+      color={colors.accentTeal}
+      scale={0.55}
+      defaultFill={colors.surfaceElevated}
+    />
+  );
 
   return (
     <View style={styles.container}>

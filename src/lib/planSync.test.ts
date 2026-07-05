@@ -453,6 +453,10 @@ describe('ensureCurrentWeekPlan offline profile-inputs cache', () => {
       // Network row didn't carry training_weekdays → cached as null
       // (legacy users / out-of-scope counts fall back to defaults).
       training_weekdays: null,
+      // Network row didn't carry a goal either — the offline cache stores
+      // null, and generatePlan falls back to 'general' at read time
+      // (ensureCurrentWeekPlan's default lane), not on write.
+      goal: null,
     });
   });
 

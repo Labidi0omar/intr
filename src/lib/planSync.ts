@@ -36,6 +36,7 @@ import {
   type PlanDay,
   type SplitId,
 } from './planGeneration';
+import type { Goal } from './goalProfile';
 import { deriveCanonicalWeek, weekRowMatchesCanonical } from '../utils/planCatchUp';
 import { normalizeTrainingWeekdays, weekdaysToOffsets } from '../utils/trainingWeekdays';
 import { gapResolvedThroughKey } from '../utils/planShift';
@@ -103,6 +104,11 @@ export interface CachedProfileInputs {
   preferred_split: string | null;
   fitness_level: string | null;
   training_weekdays: number[] | null;
+  /** The user's training goal (profiles.goal). Cached so the generator's
+   *  lane (rep bands, rest, set climb) survives an offline regen — same
+   *  model as the other plan-shaping fields. Null on legacy cache entries;
+   *  the generator falls back to catalog values when goal is missing. */
+  goal: string | null;
 }
 
 /** Read the cached profile inputs. Error-tolerant: any read/parse failure
@@ -122,6 +128,7 @@ export async function readCachedProfileInputs(): Promise<CachedProfileInputs | n
       preferred_split: typeof parsed.preferred_split === 'string' ? parsed.preferred_split : null,
       fitness_level: typeof parsed.fitness_level === 'string' ? parsed.fitness_level : null,
       training_weekdays: training_weekdays && training_weekdays.length > 0 ? training_weekdays : null,
+      goal: typeof parsed.goal === 'string' ? parsed.goal : null,
     };
   } catch {
     return null;
@@ -139,6 +146,7 @@ export async function writeCachedProfileInputs(inputs: Partial<CachedProfileInpu
       preferred_split: inputs.preferred_split !== undefined ? inputs.preferred_split : (existing?.preferred_split ?? null),
       fitness_level: inputs.fitness_level !== undefined ? inputs.fitness_level : (existing?.fitness_level ?? null),
       training_weekdays: inputs.training_weekdays !== undefined ? inputs.training_weekdays : (existing?.training_weekdays ?? null),
+      goal: inputs.goal !== undefined ? inputs.goal : (existing?.goal ?? null),
     };
     await AsyncStorage.setItem(PROFILE_INPUTS_KEY, JSON.stringify(merged));
   } catch {
@@ -171,7 +179,7 @@ export async function ensureCurrentWeekPlan({ force = false }: EnsureArgs = {}):
 
     const { data: profile } = await supabase
       .from('profiles')
-      .select('training_days, preferred_split, fitness_level, training_weekdays')
+      .select('training_days, preferred_split, fitness_level, training_weekdays, goal')
       .eq('id', user.id)
       .maybeSingle();
 
@@ -233,6 +241,27 @@ export async function ensureCurrentWeekPlan({ force = false }: EnsureArgs = {}):
     const location: Location = storedLoc === 'Home' ? 'home' : 'gym';
     const fitnessLevel = (netFitnessLevel ?? (cachedInputs?.fitness_level as FitnessLevel) ?? 'beginner') as FitnessLevel;
 
+    // Goal drives per-exercise dose (reps / rest / sets) via goalProfile.
+    // Resolution mirrors the other plan-shaping fields: network first,
+    // offline cache fallback. Default to 'general' when the user has no
+    // pick — the general lane is a PURE PASSTHROUGH (catalog values flow
+    // through unchanged) so pre-goal / default accounts see exactly the
+    // pre-goal engine's output. Only 'strength' and 'muscle' shape the
+    // dose. This is intentional: a user who never asked for a change
+    // should never silently see their programme rewritten.
+    const netGoal = (profile as { goal?: unknown } | null | undefined)?.goal;
+    const rawGoal = (typeof netGoal === 'string' ? netGoal : cachedInputs?.goal) as string | null | undefined;
+    const goal: Goal =
+      rawGoal === 'strength' || rawGoal === 'muscle' || rawGoal === 'general' ? rawGoal : 'general';
+    // The cache stores the AUTHORITATIVE value from network/cache, not the
+    // fallback — otherwise a user who never picked a goal would see the
+    // cache silently upgrade to 'general' on first read, and the next
+    // profile.goal write would appear to be a "change from general" in
+    // any diff tooling. Cache null; generatePlan / prescribeLoad receive
+    // the fallback 'general' from this function directly.
+    const goalForCache: string | null =
+      rawGoal === 'strength' || rawGoal === 'muscle' || rawGoal === 'general' ? rawGoal : null;
+
     // The user's EXPLICIT split drives generation now (it's a chosen value,
     // not a function of training_days). Fall back to the days-derived default
     // only when no pick exists. Threaded into deriveCanonicalWeek + generatePlan
@@ -274,6 +303,7 @@ export async function ensureCurrentWeekPlan({ force = false }: EnsureArgs = {}):
         preferred_split: split,
         fitness_level: fitnessLevel,
         training_weekdays: trainingWeekdays,
+        goal: goalForCache,
       });
     }
 
@@ -406,6 +436,7 @@ export async function ensureCurrentWeekPlan({ force = false }: EnsureArgs = {}):
         fitnessLevel,
         location,
         split,
+        goal,
         blockIndex: Math.floor(weeksBetween(blockAnchor, horizonAnchor) / 4),
         blockWeek: computeBlockWeek(horizonAnchor),
         selectedDayOffsets: healOffsets ?? undefined,
@@ -525,6 +556,7 @@ export async function ensureCurrentWeekPlan({ force = false }: EnsureArgs = {}):
         trainingDays,
         location,
         split,
+        goal,
         planHistory,
         weeksAhead: 1,
         startDate: ws,

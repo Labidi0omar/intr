@@ -487,6 +487,17 @@ export default function ProfileScreen() {
         // Fire-and-forget.
         if (modalType === 'split') writeCachedProfileInputs({ preferred_split: updateParams.preferred_split });
         if (modalType === 'fitness_level') writeCachedProfileInputs({ fitness_level: val });
+        // Goal drives generatePlan's per-exercise dose (goalProfile lane) —
+        // an offline regen after this edit needs the cache to reflect the
+        // change or the next self-heal would deviate. Follow with a
+        // force-regen so future rows pick up the new lane immediately;
+        // otherwise they'd carry the old dose until the block boundary.
+        if (modalType === 'goal') {
+          await writeCachedProfileInputs({ goal: val });
+          await ensureCurrentWeekPlan({ force: true });
+          setSuccessMsg('Plan rebuilt for your new goal');
+          setTimeout(() => setSuccessMsg(''), 4000);
+        }
       } else if (modalType === 'weight') {
         const kg = parseFloat(val);
         if (!isNaN(kg)) {

@@ -37,6 +37,16 @@ export interface EventProperties {
   /** GapModal replan_accepted action — resume = make up missed sessions,
    *  skip = advance past them on normal cadence. */
   replan_action?: 'resume' | 'skip';
+  /** Diagnostic trio for the resume-rotation-position bug (bro_split
+   *  landing on chest instead of the true next type). Rides along on
+   *  replan_accepted only when there was a backlog to resolve: the raw
+   *  lifetime completed-session count (the old fragile proxy), the most
+   *  recent completed session's workout_type, and the type the catch-up
+   *  pack actually started on today. Lets us confirm on-device whether
+   *  completedCount was reading 0/a multiple of dayTypes.length. */
+  resume_completed_count?: number;
+  resume_last_workout_type?: string | null;
+  resume_next_workout_type?: string | null;
   /** Training Status deload action — early = pull the deload forward,
    *  skip = un-deload the scheduled week-4 row and keep pushing. */
   deload_action?: 'early' | 'skip';

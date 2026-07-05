@@ -330,7 +330,7 @@ describe('finish-workout failure → queue → replay', () => {
 // ── runDurableSave ──────────────────────────────────────────────────────
 
 describe('runDurableSave', () => {
-  it('returns ok and does NOT enqueue when the network write succeeds', async () => {
+  it('returns ok and leaves NO queued blob when the network write succeeds', async () => {
     const save = makeSave();
     mock.enqueue('workout_sessions:select', { data: [], error: null });
     mock.enqueue('workout_sessions:insert', { data: [{ id: 'sess-1' }], error: null });
@@ -338,7 +338,8 @@ describe('runDurableSave', () => {
 
     const r = await runDurableSave(save);
     expect(r).toMatchObject({ ok: true, sessionId: 'sess-1', wasFresh: true, enqueued: false });
-    // No pendingWorkoutSave key was written.
+    // With write-ahead, the WAL entry was written momentarily and then
+    // cleared once the network confirmed the save. End state is empty.
     expect(asyncStore['pendingWorkoutSave:u1:2026-06-08']).toBeUndefined();
   });
 
@@ -360,6 +361,164 @@ describe('runDurableSave', () => {
       weight_kg: 82.5,
       reps_in_reserve: 1,
     });
+  });
+});
+
+// ── runDurableSave — WRITE-AHEAD durability ─────────────────────────────
+// The workout screen now flips phase → 'complete' optimistically, so the
+// network write completes while the user is already on the summary card.
+// A hard app-kill in that window MUST leave a durable queue entry so
+// flushPendingSaves can pick it up on next launch. This block proves the
+// ordering (WAL happens before the network) and the count (exactly one
+// queue entry, not zero, not two).
+
+describe('runDurableSave — write-ahead durability', () => {
+  it('a throw/kill before the network write still leaves exactly one queued save', async () => {
+    const save = makeSave('u1', '2026-06-08');
+
+    // Instrument setItem + supabase.from to record an ordered event
+    // timeline. If the WAL fires BEFORE the network is touched, the
+    // first WAL event index is strictly less than the first network
+    // event index — that's the write-ahead ordering, proven by the
+    // observable order in which the mocked APIs are called.
+    const events: string[] = [];
+
+    const setItemMock = (AsyncStorage as any).setItem as jest.Mock;
+    const origSetItem = setItemMock.getMockImplementation()!;
+    setItemMock.mockImplementation(async (k: string, v: string) => {
+      if (k.startsWith('pendingWorkoutSave:')) events.push(`wal:${k}`);
+      return origSetItem(k, v);
+    });
+
+    const fromMock = (supabase.from as jest.Mock);
+    const origFrom = fromMock.getMockImplementation()!;
+    fromMock.mockImplementation((t: string) => {
+      const builder = origFrom(t);
+      const origThen = builder.then;
+      // `.then` is the terminal — that's when the mock actually
+      // "makes the network call." Wrap it so we log the moment.
+      builder.then = (onF: any, onR: any) => {
+        events.push(`net:${t}`);
+        return origThen.call(builder, onF, onR);
+      };
+      return builder;
+    });
+
+    // Simulate "app killed / network unreachable" via persistent
+    // Supabase errors across both attempts. The strongest guarantee
+    // we can offer without actually SIGKILL-ing the process is:
+    // if a fatal condition prevents the network write from landing,
+    // the WAL is already durable when that condition hits.
+    for (let i = 0; i < 2; i++) {
+      mock.enqueue('workout_sessions:select', { data: null, error: { message: 'kill sim' } });
+    }
+
+    const result = await runDurableSave(save);
+
+    // 1. Write-ahead ORDERING: the WAL entry is written before the
+    //    first network call is even attempted.
+    const walIdx = events.findIndex(e => e.startsWith('wal:pendingWorkoutSave:u1:2026-06-08'));
+    const netIdx = events.findIndex(e => e.startsWith('net:'));
+    expect(walIdx).toBeGreaterThanOrEqual(0);
+    expect(netIdx).toBeGreaterThanOrEqual(0);
+    expect(walIdx).toBeLessThan(netIdx);
+
+    // 2. EXACTLY one queued save after the failure — not zero (the
+    //    write-ahead durability guarantee) and not more (a same-day
+    //    re-run overwrites the same key rather than duplicating).
+    const queuedKeys = Object.keys(asyncStore).filter(k => k.startsWith('pendingWorkoutSave:'));
+    expect(queuedKeys).toHaveLength(1);
+    expect(queuedKeys[0]).toBe('pendingWorkoutSave:u1:2026-06-08');
+
+    // 3. The queued blob carries the exact weights + RIR the finish
+    //    flow committed — nothing lossy about the WAL representation.
+    const reloaded = await loadPendingSave('u1', '2026-06-08');
+    expect(reloaded).not.toBeNull();
+    expect(reloaded?.logRows.find(r => r.exercise_name === 'Bench Press')).toMatchObject({
+      weight_kg: 82.5,
+      reps_in_reserve: 1,
+    });
+
+    // 4. Result surface: caller sees enqueued=true so it can flip
+    //    syncFailed on the summary card and let flushPendingSaves()
+    //    retry on next launch.
+    expect(result.ok).toBe(false);
+    expect(result.enqueued).toBe(true);
+  });
+
+  it('happy path: the WAL entry is written first and cleared on confirmed success', async () => {
+    const save = makeSave('u1', '2026-06-08');
+
+    // Same event log as above.
+    const events: string[] = [];
+    const setItemMock = (AsyncStorage as any).setItem as jest.Mock;
+    const origSetItem = setItemMock.getMockImplementation()!;
+    setItemMock.mockImplementation(async (k: string, v: string) => {
+      if (k.startsWith('pendingWorkoutSave:')) events.push(`wal-write:${k}`);
+      return origSetItem(k, v);
+    });
+    const removeItemMock = (AsyncStorage as any).removeItem as jest.Mock;
+    const origRemoveItem = removeItemMock.getMockImplementation()!;
+    removeItemMock.mockImplementation(async (k: string) => {
+      if (k.startsWith('pendingWorkoutSave:')) events.push(`wal-clear:${k}`);
+      return origRemoveItem(k);
+    });
+    const fromMock = (supabase.from as jest.Mock);
+    const origFrom = fromMock.getMockImplementation()!;
+    fromMock.mockImplementation((t: string) => {
+      const builder = origFrom(t);
+      const origThen = builder.then;
+      builder.then = (onF: any, onR: any) => {
+        events.push(`net:${t}`);
+        return origThen.call(builder, onF, onR);
+      };
+      return builder;
+    });
+
+    // Happy-path network responses.
+    mock.enqueue('workout_sessions:select', { data: [], error: null });
+    mock.enqueue('workout_sessions:insert', { data: [{ id: 'sess-1' }], error: null });
+    mock.enqueue('exercise_logs:insert', { data: null, error: null });
+
+    const result = await runDurableSave(save);
+    expect(result.ok).toBe(true);
+    expect(result.enqueued).toBe(false);
+
+    // Ordering: wal-write happens first; then the network calls; then
+    // wal-clear happens after all network calls landed.
+    const walWriteIdx = events.findIndex(e => e.startsWith('wal-write:'));
+    const firstNetIdx = events.findIndex(e => e.startsWith('net:'));
+    const walClearIdx = events.findIndex(e => e.startsWith('wal-clear:'));
+    expect(walWriteIdx).toBeGreaterThanOrEqual(0);
+    expect(firstNetIdx).toBeGreaterThan(walWriteIdx);
+    expect(walClearIdx).toBeGreaterThan(firstNetIdx);
+
+    // End state: zero queued blobs.
+    expect(Object.keys(asyncStore).filter(k => k.startsWith('pendingWorkoutSave:'))).toHaveLength(0);
+  });
+
+  it('same-day rerun overwrites the WAL entry instead of duplicating it', async () => {
+    const save = makeSave('u1', '2026-06-08');
+
+    // First run fails.
+    for (let i = 0; i < 2; i++) {
+      mock.enqueue('workout_sessions:select', { data: null, error: { message: 'fail 1' } });
+    }
+    await runDurableSave(save);
+    expect(
+      Object.keys(asyncStore).filter(k => k.startsWith('pendingWorkoutSave:')),
+    ).toHaveLength(1);
+
+    // Second run same day (e.g. user reopens the workout and hits
+    // finish again) — also fails. The WAL entry must still be exactly
+    // one, keyed by (user, date), not two.
+    for (let i = 0; i < 2; i++) {
+      mock.enqueue('workout_sessions:select', { data: null, error: { message: 'fail 2' } });
+    }
+    await runDurableSave(save);
+    expect(
+      Object.keys(asyncStore).filter(k => k.startsWith('pendingWorkoutSave:')),
+    ).toHaveLength(1);
   });
 });
 

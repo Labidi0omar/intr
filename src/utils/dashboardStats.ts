@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase';
-import { hitTargetZone } from '../lib/loadPrescription';
+import { hitTargetZone, type Goal } from '../lib/loadPrescription';
 import { reportSilent } from '../lib/errorReporting';
 import { isRecoveryLog, type RecoveryLogLike } from '../lib/recovery';
 
@@ -26,13 +26,16 @@ export interface EffortZone {
 }
 
 /** Most-recent N rated sets (reps_in_reserve != null), counted into the
- *  RIR 1–2 target zone. Mirrors progress.tsx — single source of truth.
- *  Returns total=0 when the user has no rated sets yet; callers should
- *  render "—" in that case rather than "0%".
+ *  goal-aware target zone. `goal` is optional — omitting it falls back to
+ *  the current 1-2 window (general lane), which keeps analytics for legacy
+ *  callers byte-identical. When goal is provided, strength users' hits
+ *  count against 2-3, muscle users' against 0-2 — the analytics % agrees
+ *  with the RIR ladder the engine actually used.
  */
 export function computeEffortZoneFromLogs(
   logsAscByDate: ExerciseLogRow[],
-  recentWindow = 30
+  recentWindow = 30,
+  goal?: Goal,
 ): EffortZone {
   if (!Array.isArray(logsAscByDate) || logsAscByDate.length === 0) {
     return { hits: 0, total: 0 };
@@ -46,13 +49,13 @@ export function computeEffortZoneFromLogs(
     if (row && !isRecoveryLog(row) && row.reps_in_reserve != null) recentRated.push(row);
   }
   if (recentRated.length === 0) return { hits: 0, total: 0 };
-  const hits = recentRated.filter(r => hitTargetZone(r.reps_in_reserve ?? null)).length;
+  const hits = recentRated.filter(r => hitTargetZone(r.reps_in_reserve ?? null, goal)).length;
   return { hits, total: recentRated.length };
 }
 
 /** Async convenience: pull the user's exercise_logs and compute the zone.
  *  Never throws — returns {hits:0,total:0} on any failure. */
-export async function computeEffortZone(userId: string, recentWindow = 30): Promise<EffortZone> {
+export async function computeEffortZone(userId: string, recentWindow = 30, goal?: Goal): Promise<EffortZone> {
   try {
     const { data } = await supabase
       .from('exercise_logs')
@@ -62,7 +65,7 @@ export async function computeEffortZone(userId: string, recentWindow = 30): Prom
       // filtering at the query keeps the payload small for active users.
       .eq('is_recovery', false)
       .order('logged_date', { ascending: true });
-    return computeEffortZoneFromLogs((data ?? []) as ExerciseLogRow[], recentWindow);
+    return computeEffortZoneFromLogs((data ?? []) as ExerciseLogRow[], recentWindow, goal);
   } catch (e) {
     reportSilent(e, 'dashboardStats:effortZone');
     return { hits: 0, total: 0 };

@@ -537,9 +537,13 @@ describe('phraseObservation', () => {
     const s = phraseObservation(strengthObs).toLowerCase();
     const m = phraseObservation(muscleObs).toLowerCase();
     const g = phraseObservation(generalObs).toLowerCase();
-    expect(s).toMatch(/strength|bar|heavy|heavier/);
-    expect(m).toMatch(/size|growth|grow|volume/);
-    expect(g).toMatch(/general|progress|steady|long arc|long-arc/);
+    // Goal pools carry lane-correct language. Strength emphasizes the
+    // heavy compound and "reps in the tank"; muscle emphasizes rep climb
+    // and volume; general (passthrough lane) stays generic — no dose
+    // directive since the lane doesn't shape the dose.
+    expect(s).toMatch(/strength|bar|heavy|heavier|tank/);
+    expect(m).toMatch(/size|growth|grow|muscle|rep|volume/);
+    expect(g).toMatch(/general|progress|steady|long arc|long-arc|long game/);
     // The three pools must produce distinguishable lines for the same split.
     expect(new Set([s, m, g]).size).toBeGreaterThan(1);
   });
@@ -648,19 +652,56 @@ describe('phraseObservation', () => {
   });
 
   it('block_position phrasing never uses raw coach-speak ("deload", "mesocycle", "block week")', () => {
-    for (const blockWeek of [3, 4] as const) {
+    // Extended to weeks 1–4 in v8 (muscle-lane ramp voice). wk1/2 pools
+    // fire only for the muscle lane, so the observation carries goal.
+    for (const blockWeek of [1, 2, 3, 4] as const) {
+      const goal = blockWeek === 1 || blockWeek === 2 ? 'muscle' as const : null;
       const lines: string[] = [];
       for (let i = 0; i < 12; i++) {
         lines.push(phraseObservation({
           type: 'block_position', id: `block_position:${blockWeek}`,
           factSig: `block-${blockWeek}-${i}`, salience: 0.4, eventDate: TODAY,
-          blockWeek,
+          blockWeek, goal,
         }));
       }
       const joined = lines.join('\n').toLowerCase();
       expect(joined).not.toMatch(/\bdeload\b/);
       expect(joined).not.toMatch(/\bmesocycle\b/);
     }
+  });
+
+  it('muscle-lane block_position wk1 speaks to the INTRO of the ramp', () => {
+    // The whole point of wk1 copy: the SETS climb from here, don't push
+    // loads on a light-volume week. Every entry should communicate this
+    // (via one of "ramp"/"climb"/"stack"/"volume"/"low"/"light"/"intro"/"grow").
+    const lines: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      lines.push(phraseObservation({
+        type: 'block_position', id: 'block_position:1',
+        factSig: `block-1-gmuscle-${i}`, salience: 0.5, eventDate: TODAY,
+        blockWeek: 1, goal: 'muscle',
+      }));
+    }
+    const joined = lines.join('\n').toLowerCase();
+    expect(joined).toMatch(/ramp|climb|stack|volume|light|intro|grow|low/);
+    // Under 130 chars per line (hero contract).
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(130);
+  });
+
+  it('muscle-lane block_position wk2 speaks to the BUILD (more sets, hold loads)', () => {
+    const lines: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      lines.push(phraseObservation({
+        type: 'block_position', id: 'block_position:2',
+        factSig: `block-2-gmuscle-${i}`, salience: 0.55, eventDate: TODAY,
+        blockWeek: 2, goal: 'muscle',
+      }));
+    }
+    const joined = lines.join('\n').toLowerCase();
+    // Every wk2 line references the volume climb or the "more sets"
+    // beat — that's the whole reason this pool exists.
+    expect(joined).toMatch(/climb|volume|more sets|extra sets|build|ramp/);
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(130);
   });
 });
 

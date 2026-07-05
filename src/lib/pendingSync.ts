@@ -189,22 +189,49 @@ export async function enqueuePendingSave(save: PendingSave): Promise<void> {
 }
 
 /**
- * Run the durable save: try the network write, and if it fails (or throws),
- * persist the full save to the AsyncStorage queue. Never throws — the
- * finish flow needs to keep moving regardless.
+ * Run the durable save with WRITE-AHEAD semantics: enqueue the save to
+ * AsyncStorage FIRST, then attempt the network write, then remove the
+ * queue entry on confirmed success. Never throws.
  *
- * This is what the workout-finish flow MUST call before any decorative
- * fetch (PR detection, analytics). The historical bug was that a
- * pre-save read (the PR query) threw on a flaky network and aborted the
- * outer try/catch BEFORE the save ran — the user lost their session.
- * Calling runDurableSave first means the save is committed (network or
- * queue) before anything else can fail.
+ * Why write-ahead. The workout finish flow flips phase → 'complete'
+ * optimistically (immediately after building the save from in-memory
+ * state), so the network write happens while the user is already on the
+ * summary screen. A hard app-kill in that window used to leave nothing
+ * durable — the queue was only written AFTER a persistent network
+ * failure. With write-ahead, the queue entry exists before the very
+ * first Supabase call, so flushPendingSaves() on next launch always
+ * finds the save.
+ *
+ * Ordering:
+ *   1. enqueuePendingSave(save)            — write-ahead entry
+ *   2. attemptSaveWithRetry(save)          — network write, once + retry
+ *   3a. success → clearPendingSave()       — remove the queue entry
+ *   3b. failure → leave the queue entry    — flushPendingSaves replays
+ *
+ * Edge cases:
+ *   - Step 1 fails (AsyncStorage OOM / disk full). We report and press
+ *     on to the network write. If the network succeeds, no data loss.
+ *     If the network fails, the caller sees enqueued=false and treats
+ *     this as the "very-bad" last-resort case (same as pre-write-ahead).
+ *   - Step 3a fails (AsyncStorage clear failed). The queue entry
+ *     survives; the next launch's flushPendingSaves replays it. Replay
+ *     is idempotent by design (an existing workout_sessions row is
+ *     updated instead of re-inserted — see the module doc header). The
+ *     caller still sees ok=true / enqueued=false because the data IS
+ *     safely persisted server-side.
+ *   - Called from the same-day retry path: enqueuePendingSave uses
+ *     setItem which OVERWRITES existing keys, so a stale prior WAL
+ *     entry for the same (user, date) is replaced, not duplicated.
  *
  * Returns:
- *   - ok=true        → workout_sessions + exercise_logs persisted via Supabase
- *   - ok=false       → save is in the offline queue (enqueued=true) or, in
- *                      the very-bad case, the queue write also failed
- *                      (enqueued=false). Either way, never throws.
+ *   - ok=true         → server has the save. enqueued=false. WAL was
+ *                       written and cleared; if the clear failed, the
+ *                       next launch's replay is a no-op.
+ *   - ok=false, enqueued=true  → the save is durable in the queue.
+ *                       flushPendingSaves on next launch will retry.
+ *   - ok=false, enqueued=false → BOTH the WAL write AND the network
+ *                       write failed. The caller's outer catch treats
+ *                       this as the very-bad last-resort path.
  */
 export async function runDurableSave(save: PendingSave): Promise<{
   ok: boolean;
@@ -213,6 +240,22 @@ export async function runDurableSave(save: PendingSave): Promise<{
   enqueued: boolean;
   error?: unknown;
 }> {
+  // Step 1: WRITE-AHEAD. Any failure to reach step 2 or step 3 (kill,
+  // crash, OOM, offline) is now recoverable because the full save
+  // (session fields + logRows including weights and RIR) is in
+  // AsyncStorage before we make a single Supabase call.
+  let walOk = true;
+  try {
+    await enqueuePendingSave(save);
+  } catch (walErr) {
+    walOk = false;
+    // Best-effort — proceed to the network write anyway. If the network
+    // succeeds, there's no data loss; if it fails, `enqueued: false` is
+    // returned and the caller's outer catch treats this as last-resort.
+    Sentry.captureException(walErr);
+  }
+
+  // Step 2: network write, with one retry.
   let result: AttemptResult;
   try {
     result = await attemptSaveWithRetry(save);
@@ -220,20 +263,34 @@ export async function runDurableSave(save: PendingSave): Promise<{
     // attemptSave swallows its own errors via the internal try/catch, so
     // this branch is genuinely belt-and-suspenders. If the chain itself
     // threw (e.g. supabase client construction error), we treat it as a
-    // failed attempt and fall through to enqueue.
+    // failed attempt and leave the WAL entry in place.
     result = { ok: false, error: e };
   }
+
   if (result.ok) {
+    // Step 3a: network succeeded. Remove the WAL entry so the next
+    // launch's flushPendingSaves doesn't replay it. A failed clear is
+    // tolerated — replay is idempotent (updates the existing session
+    // row), so a stray WAL entry costs one no-op flush on next boot.
+    try {
+      await clearPendingSave(save.userId, save.plannedDate);
+    } catch (clearErr) {
+      Sentry.captureException(clearErr);
+    }
     return { ok: true, sessionId: result.sessionId, wasFresh: result.wasFresh, enqueued: false };
   }
-  try {
-    await enqueuePendingSave(save);
-    return { ok: false, sessionId: null, wasFresh: false, enqueued: true, error: result.error };
-  } catch (enqueueErr) {
-    // Queue write itself failed (AsyncStorage offline / out of space).
-    // Caller's outer catch should treat this as the last-resort case.
-    return { ok: false, sessionId: null, wasFresh: false, enqueued: false, error: enqueueErr };
-  }
+
+  // Step 3b: network failed. If the WAL landed (walOk), the save is
+  // durable and flushPendingSaves picks it up next launch. If the WAL
+  // ALSO failed (walOk === false), we have nothing — the caller's
+  // outer catch is the last resort.
+  return {
+    ok: false,
+    sessionId: null,
+    wasFresh: false,
+    enqueued: walOk,
+    error: result.error,
+  };
 }
 
 /**

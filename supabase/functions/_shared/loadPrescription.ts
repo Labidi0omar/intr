@@ -35,6 +35,12 @@ export function isCompoundName(name: string): boolean {
 }
 
 // ── Prescription ───────────────────────────────────────────────────────
+// Mirror of the RN-side loadPrescription: goal-aware RIR ladder, calibration
+// damper, and universal top-of-band gate. Keep in sync with the RN file —
+// loadPrescription.parity.test.ts iterates the full input grid across both
+// implementations and will fail loudly on any divergence.
+
+export type Goal = 'strength' | 'muscle' | 'general';
 
 export interface PrescriptionInput {
   lastWeightKg: number;
@@ -42,6 +48,10 @@ export interface PrescriptionInput {
   energyScore: number;
   isCompound: boolean;
   fitnessLevel?: 'beginner' | 'intermediate' | 'advanced';
+  goal?: Goal;
+  lastReps?: number | null;
+  topReps?: number | null;
+  sessionCountForLift?: number;
 }
 
 export interface Prescription {
@@ -50,12 +60,17 @@ export interface Prescription {
   rationale: 'progress' | 'hold' | 'backoff' | 'no_history';
 }
 
+export const CALIBRATION_SESSIONS = 3;
+
 function roundToPlate(kg: number, step = 2.5): number {
   return Math.max(step, Math.round(kg / step) * step);
 }
 
 export function prescribeLoad(input: PrescriptionInput): Prescription {
-  const { lastWeightKg, lastRir, energyScore, isCompound, fitnessLevel } = input;
+  const {
+    lastWeightKg, lastRir, energyScore, isCompound, fitnessLevel,
+    goal, lastReps, topReps, sessionCountForLift,
+  } = input;
 
   if (!lastWeightKg || lastWeightKg <= 0) {
     return { suggestedWeightKg: lastWeightKg, deltaPct: 0, rationale: 'no_history' };
@@ -64,16 +79,42 @@ export function prescribeLoad(input: PrescriptionInput): Prescription {
     return { suggestedWeightKg: lastWeightKg, deltaPct: 0, rationale: 'hold' };
   }
 
-  const beginnerScale = fitnessLevel === 'beginner' ? 0.5 : 1;
-  const up = (isCompound ? 0.05 : 0.025) * beginnerScale;
+  const inCalibrationWindow =
+    fitnessLevel === 'beginner' ||
+    (typeof sessionCountForLift === 'number' && sessionCountForLift < CALIBRATION_SESSIONS);
+
+  const stepScale = inCalibrationWindow ? 0.5 : 1;
+  const up = (isCompound ? 0.05 : 0.025) * stepScale;
+
+  const lane: Goal =
+    goal === 'strength' || goal === 'muscle' || goal === 'general' ? goal : 'general';
 
   let deltaPct: number;
   let rationale: Prescription['rationale'];
 
-  if (lastRir >= 3)      { deltaPct = up;     rationale = 'progress'; }
-  else if (lastRir === 2){ deltaPct = up / 2; rationale = 'progress'; }
-  else if (lastRir === 1){ deltaPct = 0;      rationale = 'hold'; }
-  else                   { deltaPct = -0.05;  rationale = 'backoff'; }
+  if (lane === 'strength') {
+    if (lastRir >= 3)                       { deltaPct = up;    rationale = 'progress'; }
+    else if (lastRir === 2 || lastRir === 1){ deltaPct = 0;     rationale = 'hold'; }
+    else                                    { deltaPct = -0.05; rationale = 'backoff'; }
+  } else {
+    if (lastRir >= 3)      { deltaPct = up;      rationale = 'progress'; }
+    else if (lastRir === 2){ deltaPct = up / 2;  rationale = 'progress'; }
+    else if (lastRir === 1){ deltaPct = 0;       rationale = 'hold'; }
+    else                   { deltaPct = -0.05;   rationale = 'backoff'; }
+  }
+
+  if (inCalibrationWindow && lastRir === 0) {
+    deltaPct = 0;
+    rationale = 'hold';
+  }
+
+  const gateActive =
+    typeof lastReps === 'number' && Number.isFinite(lastReps) &&
+    typeof topReps === 'number' && Number.isFinite(topReps) && topReps > 0;
+  if (gateActive && rationale === 'progress' && (lastReps as number) < (topReps as number)) {
+    deltaPct = 0;
+    rationale = 'hold';
+  }
 
   if (energyScore <= 2 && deltaPct > 0) {
     deltaPct = 0;

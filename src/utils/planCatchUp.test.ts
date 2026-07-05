@@ -21,6 +21,7 @@ import {
   healCurrentWeekRow,
   weekRowMatchesCanonical,
 } from './planCatchUp';
+import { nextRotationPhase } from '../lib/planGeneration';
 
 const baseArgs = {
   todayIso: '2026-06-06', // Saturday
@@ -443,6 +444,109 @@ describe('buildCatchUpRows — mesocycle phase', () => {
       // No split specified → splitForDays(3) === 'ppl'.
     });
     expect(flatten(rows)[0].workoutType).toBe('Legs');
+  });
+});
+
+// ── Resume rotation position derived from the last completed session ───
+// Bug: ackGap('resume') passed a raw lifetime completed-session COUNT as
+// mesocyclePosition. That count is a fragile proxy — it lands on chest
+// (dayTypes[0]) whenever it's a multiple of dayTypes.length or reads 0,
+// and drifts on any split change, ad-hoc session, or un-counted
+// completion. The fix: home.tsx now resolves mesocyclePosition via
+// nextRotationPhase(lastCompletedWorkoutType) instead, falling back to
+// the count only when there's no last completed session. This exercises
+// the exact composition home.tsx performs: map the last completed type →
+// phase → feed into buildCatchUpRows → assert the catch-up starts on the
+// correct next type, regardless of what the lifetime count says.
+
+describe('resume rotation position — derived from last completed workout_type', () => {
+  it('bro_split: given a last completed session of each type, the catch-up starts on the next type (arms → legs)', () => {
+    const dayTypeSequence = ['Chest', 'Back', 'Shoulders', 'Arms', 'Legs'];
+    for (let i = 0; i < dayTypeSequence.length; i++) {
+      const lastCompletedWorkoutType = dayTypeSequence[i];
+      const expectedNextType = dayTypeSequence[(i + 1) % dayTypeSequence.length];
+
+      // A wildly wrong lifetime count (0) — if the fallback were still
+      // used here, this would incorrectly restart at Chest for any i
+      // where completedCount % 5 === 0. The resolved phase must win.
+      const phase = nextRotationPhase({
+        split: 'bro_split',
+        trainingDays: 5,
+        lastWorkoutType: lastCompletedWorkoutType,
+      });
+      expect(phase).not.toBeNull();
+
+      const { rows } = buildCatchUpRows({
+        ...baseArgs,
+        trainingDays: 5,
+        split: 'bro_split',
+        backlogN: 1,
+        mesocyclePosition: phase!,
+      });
+      expect(flatten(rows)[0].workoutType).toBe(expectedNextType);
+    }
+  });
+
+  it('REGRESSION: last completed = Arms → next is Legs, not a chest restart even when completedCount ≡ 0 mod 5', () => {
+    // The exact bug report: bro_split, last workout was arms, but the
+    // resume offer started at chest. Simulate the failure mode directly —
+    // a lifetime count of 10 (≡ 0 mod 5) alongside a last completed type
+    // of Arms. The count-based fallback would produce Chest; the
+    // type-derived phase must produce Legs.
+    const staleCompletedCount = 10; // ≡ 0 mod 5 → would fall through to Chest
+    const phase = nextRotationPhase({
+      split: 'bro_split',
+      trainingDays: 5,
+      lastWorkoutType: 'Arms',
+    });
+    expect(phase).not.toBeNull();
+    expect(phase).not.toBe(staleCompletedCount);
+
+    const buggyRows = buildCatchUpRows({
+      ...baseArgs,
+      trainingDays: 5,
+      split: 'bro_split',
+      backlogN: 1,
+      mesocyclePosition: staleCompletedCount,
+    });
+    expect(flatten(buggyRows.rows)[0].workoutType).toBe('Chest'); // the bug
+
+    const fixedRows = buildCatchUpRows({
+      ...baseArgs,
+      trainingDays: 5,
+      split: 'bro_split',
+      backlogN: 1,
+      mesocyclePosition: phase!,
+    });
+    expect(flatten(fixedRows.rows)[0].workoutType).toBe('Legs'); // the fix
+  });
+
+  it('PPL: last completed = Legs → next resolved phase lands on Push (missed-legs property preserved)', () => {
+    const phase = nextRotationPhase({ split: 'ppl', trainingDays: 3, lastWorkoutType: 'Legs' });
+    expect(phase).not.toBeNull();
+    const { rows } = buildCatchUpRows({
+      ...baseArgs,
+      backlogN: 1,
+      mesocyclePosition: phase!,
+    });
+    expect(flatten(rows)[0].workoutType).toBe('Push');
+  });
+
+  it('falls back to the count-based phase when there is no resolvable last-completed type (true cold start)', () => {
+    const phase = nextRotationPhase({ split: 'bro_split', trainingDays: 5, lastWorkoutType: null });
+    expect(phase).toBeNull();
+    // Caller's fallback: `resolvedPhase ?? completedCount`. With no history
+    // at all completedCount is 0 too — catch-up starts at Chest, same as
+    // any brand-new user.
+    const fallbackCompletedCount = 0;
+    const { rows } = buildCatchUpRows({
+      ...baseArgs,
+      trainingDays: 5,
+      split: 'bro_split',
+      backlogN: 1,
+      mesocyclePosition: phase ?? fallbackCompletedCount,
+    });
+    expect(flatten(rows)[0].workoutType).toBe('Chest');
   });
 });
 

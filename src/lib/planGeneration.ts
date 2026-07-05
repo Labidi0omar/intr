@@ -9,6 +9,13 @@
 // ──────────────────────────────────────────────────────────────────
 
 import { EXERCISES } from '../constants/exercises';
+import { goalReps, goalRest, goalSets, type Goal } from './goalProfile';
+import {
+  buildDayStructure,
+  type BlockWeek,
+  type DayStructure,
+  type MuscleSlot,
+} from './planRules';
 
 /**
  * Generator version. Bump this by 1 whenever the plan-generation logic changes
@@ -48,8 +55,34 @@ import { EXERCISES } from '../constants/exercises';
  *       walks the full template over the mesocycle. inWeekStartIndex is now
  *       a no-op for fixed splits; dayIndexOffset is the canonical phase param
  *       across all rotations. Old future rows rebuild on next app open.
+ *   7 — goal-aware doses: reps / rest / sets are now shaped by profiles.goal
+ *       (strength / muscle / general) via src/lib/goalProfile.ts. Every
+ *       exercise is written with the lane's rep band and rest, per its
+ *       catalog `movement` classification (compound vs isolation). Muscle
+ *       and general isolations also gain +1 set in block weeks 2-3
+ *       (volume-first progression); strength stays flat and progresses via
+ *       load (see loadPrescription's top-of-band gate). Deload stacks on
+ *       top of the goal dose unchanged. Existing future rows regenerate on
+ *       next app open — the output change is intentional and deliberately
+ *       differentiates lanes that used to be identical.
+ *   8 — principled goal-aware STRUCTURE + progressive volume ramp for the
+ *       strength and muscle lanes. src/lib/planRules.ts replaces the
+ *       hardcoded SPLIT_RULES.exerciseRules tables when goal ∈ {strength,
+ *       muscle}: slot count, compound:isolation ratio, and per-slot sets
+ *       are derived from four small data tables (weekly-peak sets,
+ *       per-muscle session cap, compound ratio, whole-session cap). Volume
+ *       ramps ACROSS the 4-week block on the muscle lane: wk1 = peak-2,
+ *       wk2 = peak-1, wk3 = MAV peak, wk4 = deload of the peak — the ramp
+ *       lives on isolation slots so heavy compound anchors stay flat.
+ *       Strength stays flat within the block and progresses via load.
+ *       GENERAL is UNTOUCHED — the SPLIT_RULES path is unchanged for that
+ *       lane, so existing/default users see no output change. Determinism
+ *       is preserved by construction: slot IDENTITY (count, compound
+ *       ordering) is fixed within a block, so the seeded picker still
+ *       returns identical EXERCISES for weeks 1–3. Also stamps
+ *       PlanDay.blockWeek for the coach to speak to the ramp phase.
  */
-export const CURRENT_PLAN_VERSION = 6;
+export const CURRENT_PLAN_VERSION = 8;
 
 export type FitnessLevel = 'beginner' | 'intermediate' | 'advanced';
 export type Location = 'gym' | 'home';
@@ -63,6 +96,12 @@ export interface PlanExercise {
   reps: string;
   restSeconds: number;
   imageUrl: string;
+  /** Optional sub-region emphasis carried from the catalog through
+   *  weekly_plans → workout state → MuscleDetails. Undefined for entries
+   *  in old plan rows written before this field existed — those fall
+   *  back to the primaryMuscle's default slug in MuscleDetails, which is
+   *  byte-for-byte the pre-emphasis render. */
+  emphasis?: import('../constants/exercises').ExerciseEntry['emphasis'];
 }
 
 export interface PlanDay {
@@ -88,6 +127,14 @@ export interface PlanDay {
    *  recover; the coach uses it to suppress aggressive progression copy.
    *  Optional so older stored plans (pre-v4) deserialize cleanly. */
   deload?: boolean;
+  /** In-block week position (1..4) this day belongs to. Set for strength
+   *  and muscle lanes so the coach can speak to the volume-ramp phase
+   *  (intro / build / peak / deload). Omitted for the general lane and for
+   *  stored pre-v8 rows — consumers treat undefined as "unknown phase, no
+   *  ramp-specific copy" and fall through to the pre-v8 voice. Strictly
+   *  redundant with `deload` when blockWeek === 4, but the field carries
+   *  more information for weeks 1–3 which is otherwise indistinguishable. */
+  blockWeek?: BlockWeek;
 }
 
 // ── Split rules — full mapping from (split, dayType, location, level) ─
@@ -305,6 +352,37 @@ export function resolveSplit(split: SplitId | undefined | null, trainingDays: nu
   return splitForDays(trainingDays);
 }
 
+/**
+ * Maps the most recently COMPLETED session's stored workout_type (the
+ * capitalized DAY_TYPE_LABELS value written to workout_sessions.workout_type
+ * — "Legs", "Arms", etc., not the internal lowercase dayType key) to the
+ * rotation phase for the user's NEXT session: lastTypeIndex + 1.
+ *
+ * This replaces the fragile "lifetime completed-session count" proxy that
+ * ackGap('resume') used to pass straight through as dayIndexOffset — a raw
+ * count drifts on any ad-hoc session, split change, or un-counted
+ * completion, and lands on dayTypes[0] (chest, for bro_split) whenever it
+ * happens to be a multiple of dayTypes.length or reads 0. Reading the
+ * actual last type is exact regardless of how the count got there.
+ *
+ * Returns null when there's nothing to resolve from — no last completed
+ * session (true cold start), or a type that doesn't belong to the
+ * RESOLVED split's dayTypes (the user changed splits since that session,
+ * or it was an ad-hoc/off-template workout). Callers should fall back to
+ * the count-based phase in that case.
+ */
+export function nextRotationPhase(args: {
+  split?: SplitId | null;
+  trainingDays: number;
+  lastWorkoutType?: string | null;
+}): number | null {
+  if (!args.lastWorkoutType) return null;
+  const splitId = resolveSplit(args.split ?? undefined, args.trainingDays);
+  const dayTypes = SPLIT_RULES[splitId].dayTypes as readonly string[];
+  const idx = dayTypes.findIndex(dt => (DAY_TYPE_LABELS[dt] ?? dt) === args.lastWorkoutType);
+  return idx === -1 ? null : idx + 1;
+}
+
 // ── Ad-hoc single-day generation ──────────────────────────────────────
 // Used by the "Train anyway" affordance on the rest-day / no-plan error
 // screen. Builds a single PlanDay of a user-chosen workout type so the rest
@@ -356,6 +434,10 @@ export function generateAdHocDay(args: {
   blockIndex?: number;
   /** Local YYYY-MM-DD; defaults to today inside generatePlan. */
   startDate?: string;
+  /** User's training goal (profiles.goal). When omitted the ad-hoc day
+   *  falls back to catalog reps/rest/sets — same back-compat contract as
+   *  generatePlan. */
+  goal?: Goal;
 }): PlanDay | null {
   const cfg = AD_HOC_CONFIGS[args.workoutType];
   if (!cfg) return null;
@@ -368,6 +450,7 @@ export function generateAdHocDay(args: {
     dayIndexOffset: cfg.dayIndexOffset,
     blockIndex: args.blockIndex ?? 0,
     startDate: args.startDate,
+    goal: args.goal,
   });
   return plan[0] ?? null;
 }
@@ -770,10 +853,25 @@ export interface GeneratePlanArgs {
    *  full_body has no effect on output. Only the fixed-template lookup
    *  reads it. */
   inWeekStartIndex?: number;
+  /** User's training goal (profiles.goal). Shapes per-exercise reps / rest
+   *  / sets via src/lib/goalProfile.ts based on catalog.movement:
+   *    - strength: heavy compound (3-5), lower-rep isolation (8-10),
+   *      longer rest, sets flat across the block.
+   *    - muscle:   hypertrophy compound (6-10), high-rep isolation (10-15),
+   *      shorter rest, isolation sets climb in wks 2-3.
+   *    - general:  BLENDED default — heavy-ish compound (5-8), growth-band
+   *      isolation (10-15), moderate rest, isolation sets climb in wks 2-3.
+   *  Undefined → catalog values pass through unchanged (back-compat for
+   *  callers / tests that don't care about the lane). The self-heal
+   *  comparison in planCatchUp only checks (date, workoutType), so a
+   *  reps/rest/sets change from goal takes effect at the next week
+   *  boundary without triggering an unwanted heal on already-materialized
+   *  rows — same scoping as swaps and deloads. */
+  goal?: Goal;
 }
 
 export function generatePlan(args: GeneratePlanArgs): PlanDay[] {
-  const { fitnessLevel, trainingDays, location, planHistory } = args;
+  const { fitnessLevel, trainingDays, location, planHistory, goal } = args;
   const weeksAhead = Math.max(1, Math.min(12, args.weeksAhead ?? 1));
   const dayIndexOffset = Math.max(0, args.dayIndexOffset ?? 0);
   const blockIndex = Math.max(0, args.blockIndex ?? 0);
@@ -885,77 +983,172 @@ export function generatePlan(args: GeneratePlanArgs): PlanDay[] {
 
     globalI++;
 
-    const rules = (rule.exerciseRules as any)[dayType];
-    if (!rules) continue;
-    const locationRules = rules[location];
-    if (!locationRules) continue;
-    const level = fitnessLevel === 'advanced' ? 'intermediate' : fitnessLevel;
-    const levelRules = locationRules[level];
-    if (!levelRules) continue;
-
     const exercises: PlanExercise[] = [];
     const muscleGroups: string[] = [];
 
-    for (const entry of levelRules.structure as string[]) {
-      const [muscle, countStr] = entry.split(':');
-      const count = parseInt(countStr, 10);
+    // ── Engine-lane branch: strength / muscle route through planRules ──
+    // planRules produces a principled slot list (compound:isolation ratio,
+    // ramped sets per week). Only fires when goal is strength/muscle AND
+    // the (split, dayType) is engine-mapped in DAY_TYPE_MUSCLES. Everything
+    // else falls through to the SPLIT_RULES path below — that path is the
+    // ONLY thing the general lane ever sees, so `goal === 'general'` users
+    // get byte-identical output to v7.
+    const engineLane: 'strength' | 'muscle' | null =
+      goal === 'strength' || goal === 'muscle' ? goal : null;
+    const engineStructure: DayStructure | null = engineLane
+      ? buildDayStructure({
+          goal: engineLane,
+          dayType,
+          location,
+          level: fitnessLevel,
+          split: splitId,
+          trainingDays,
+        })
+      : null;
 
-      const rand = makeRand(blockIndex, dayType, muscle);
-      const picked = pickExercises(muscle, location, fitnessLevel, count, usedExerciseNames, rand, planHistory);
-      if (picked.length < count) {
-        const fallback = EXERCISES.filter(e =>
-          e.primaryMuscle === muscle &&
-          e.location.includes(location) &&
-          e.difficulty.includes(fitnessLevel === 'advanced' ? 'intermediate' : fitnessLevel)
-        );
-        const remaining = fallback.filter(e => !usedExerciseNames.has(e.name));
-        picked.push(...(remaining.length > 0 ? remaining : fallback).slice(0, count - picked.length));
+    if (engineStructure) {
+      // Engine path. planRules gave us an ordered list of muscles + slots;
+      // for each muscle we call pickExercises with the total slot count
+      // (compounds guaranteed by ensureCompound for majors, sorted
+      // compound-first by classifyCompoundness), then MAP the returned
+      // exercises 1:1 onto the slots. Compound-first sort in the picker
+      // aligns with slots' compound-first ordering out of planRules.
+      for (const group of engineStructure.muscles) {
+        const muscle = group.muscle;
+        const slots: MuscleSlot[] = group.slots;
+        const count = slots.length;
+        if (count === 0) continue;
+
+        const rand = makeRand(blockIndex, dayType, muscle);
+        const picked = pickExercises(muscle, location, fitnessLevel, count, usedExerciseNames, rand, planHistory);
+        if (picked.length < count) {
+          const fallback = EXERCISES.filter(e =>
+            e.primaryMuscle === muscle &&
+            e.location.includes(location) &&
+            e.difficulty.includes(fitnessLevel === 'advanced' ? 'intermediate' : fitnessLevel)
+          );
+          const remaining = fallback.filter(e => !usedExerciseNames.has(e.name));
+          picked.push(...(remaining.length > 0 ? remaining : fallback).slice(0, count - picked.length));
+        }
+
+        // Within-muscle compound-first sort (matches slot ordering).
+        picked.sort((a, b) => classifyCompoundness(b.name) - classifyCompoundness(a.name));
+
+        for (let i = 0; i < picked.length; i++) {
+          const ex = picked[i];
+          const slot = slots[i];
+          usedExerciseNames.add(ex.name);
+          // Reps and rest still flow through goalReps / goalRest as v7 —
+          // planRules owns SETS only, not the load-side dose. Deload adds
+          // +2 reps on wk4 same as before (planRules' setsByWeek[4] is the
+          // already-deloaded set count, so no double-deload on sets).
+          const compound = ex.movement === 'compound';
+          const gReps = goalReps(ex.reps, goal, compound);
+          const gRest = goalRest(ex.restSeconds, goal, compound);
+          const sets = slot.setsByWeek[blockWeekInLoop as BlockWeek];
+          const reps = isDeloadWeek ? (deloadReps(gReps) as string) : gReps;
+          exercises.push({
+            name: ex.name,
+            equipment: ex.equipment,
+            primaryMuscle: MUSCLE_GROUP_LABELS[muscle] || muscle,
+            sets,
+            reps,
+            restSeconds: gRest,
+            imageUrl: ex.imageUrl,
+            emphasis: ex.emphasis,
+          });
+        }
+
+        const label = MUSCLE_GROUP_LABELS[muscle] || muscle;
+        if (!muscleGroups.includes(label)) muscleGroups.push(label);
       }
+    } else {
+      // Fallback path — the pre-v8 SPLIT_RULES flow. Unchanged for the
+      // general lane; also handles engine-lane calls where the (split,
+      // dayType) isn't engine-mapped (e.g. an unusual custom dayType).
+      const rules = (rule.exerciseRules as any)[dayType];
+      if (!rules) continue;
+      const locationRules = rules[location];
+      if (!locationRules) continue;
+      const level = fitnessLevel === 'advanced' ? 'intermediate' : fitnessLevel;
+      const levelRules = locationRules[level];
+      if (!levelRules) continue;
 
-      // Reorder within this muscle group: compounds first, isolations last.
-      // Stable sort keeps the variety-scored order between same-rank exercises.
-      picked.sort((a, b) => classifyCompoundness(b.name) - classifyCompoundness(a.name));
+      for (const entry of levelRules.structure as string[]) {
+        const [muscle, countStr] = entry.split(':');
+        const count = parseInt(countStr, 10);
 
-      picked.forEach(ex => {
-        usedExerciseNames.add(ex.name);
-        // Deload weeks share the same exercises as weeks 1–3 of the block
-        // (that's what makes the data comparable for the autoregulator).
-        // Only the dose changes: fewer sets, +2 rep target signalling
-        // lighter loads. Both deloadSets and deloadReps are arithmetic
-        // helpers tested directly in planGeneration.deload.test.ts.
-        const sets = isDeloadWeek ? deloadSets(ex.sets) : ex.sets;
-        const reps = isDeloadWeek ? (deloadReps(ex.reps) as string) : ex.reps;
-        exercises.push({
-          name: ex.name,
-          equipment: ex.equipment,
-          primaryMuscle: MUSCLE_GROUP_LABELS[muscle] || muscle,
-          sets,
-          reps,
-          restSeconds: ex.restSeconds,
-          imageUrl: ex.imageUrl,
+        const rand = makeRand(blockIndex, dayType, muscle);
+        const picked = pickExercises(muscle, location, fitnessLevel, count, usedExerciseNames, rand, planHistory);
+        if (picked.length < count) {
+          const fallback = EXERCISES.filter(e =>
+            e.primaryMuscle === muscle &&
+            e.location.includes(location) &&
+            e.difficulty.includes(fitnessLevel === 'advanced' ? 'intermediate' : fitnessLevel)
+          );
+          const remaining = fallback.filter(e => !usedExerciseNames.has(e.name));
+          picked.push(...(remaining.length > 0 ? remaining : fallback).slice(0, count - picked.length));
+        }
+
+        picked.sort((a, b) => classifyCompoundness(b.name) - classifyCompoundness(a.name));
+
+        picked.forEach(ex => {
+          usedExerciseNames.add(ex.name);
+          // Goal-aware dose is applied FIRST, then deload stacks on top:
+          //   catalog → goalReps/goalRest/goalSets → deloadReps/deloadSets
+          // goalReps / goalSets pass the catalog value through unchanged
+          // when goal is missing (general lane), so callers that don't set
+          // goal (older tests, ad-hoc code paths pre-goal) get byte-identical
+          // output.
+          const compound = ex.movement === 'compound';
+          const gReps = goalReps(ex.reps, goal, compound);
+          const gRest = goalRest(ex.restSeconds, goal, compound);
+          const gSets = goalSets(ex.sets, goal, compound, blockWeekInLoop);
+          const sets = isDeloadWeek ? deloadSets(gSets) : gSets;
+          const reps = isDeloadWeek ? (deloadReps(gReps) as string) : gReps;
+          exercises.push({
+            name: ex.name,
+            equipment: ex.equipment,
+            primaryMuscle: MUSCLE_GROUP_LABELS[muscle] || muscle,
+            sets,
+            reps,
+            restSeconds: gRest,
+            imageUrl: ex.imageUrl,
+            emphasis: ex.emphasis,
+          });
         });
-      });
 
-      const label = MUSCLE_GROUP_LABELS[muscle] || muscle;
-      if (!muscleGroups.includes(label)) muscleGroups.push(label);
+        const label = MUSCLE_GROUP_LABELS[muscle] || muscle;
+        if (!muscleGroups.includes(label)) muscleGroups.push(label);
+      }
     }
 
     // Session-level reorder: across the whole day, put heaviest compounds
     // first, secondary compounds next, isolations last. Within each rank,
-    // preserve the upstream order (the per-muscle compounds-first pick at
-    // line ~431 already handled within-group ordering — this just lifts that
-    // across the session). Stable sort guarantees this preservation.
+    // preserve the upstream order (the per-muscle compounds-first pick
+    // already handled within-group ordering — this just lifts that across
+    // the session). Stable sort guarantees this preservation.
     exercises.sort((a, b) => classifyCompoundness(b.name) - classifyCompoundness(a.name));
 
-    if ((levelRules as any).lastMuscle && exercises.length > 0) {
-      const lastMuscleLabel = MUSCLE_GROUP_LABELS[(levelRules as any).lastMuscle] || (levelRules as any).lastMuscle;
-      const lastEx = exercises[exercises.length - 1];
-      if (lastEx.primaryMuscle !== lastMuscleLabel) {
-        const swapIdx = exercises.findIndex(e => e.primaryMuscle === lastMuscleLabel);
-        if (swapIdx >= 0 && swapIdx !== exercises.length - 1) {
-          const tmp = exercises[exercises.length - 1];
-          exercises[exercises.length - 1] = exercises[swapIdx];
-          exercises[swapIdx] = tmp;
+    // lastMuscle pin is a SPLIT_RULES concept (used by bro_split fallback
+    // path to keep e.g. triceps at the tail of chest day). Engine-lane
+    // days derive muscle ordering from DAY_TYPE_MUSCLES priority and don't
+    // need a separate pin — small muscles are already last in the list.
+    if (!engineStructure) {
+      const rulesForPin = (rule.exerciseRules as any)[dayType];
+      const locRulesForPin = rulesForPin?.[location];
+      const level = fitnessLevel === 'advanced' ? 'intermediate' : fitnessLevel;
+      const levelRulesForPin = locRulesForPin?.[level];
+      if (levelRulesForPin?.lastMuscle && exercises.length > 0) {
+        const lastMuscleLabel = MUSCLE_GROUP_LABELS[levelRulesForPin.lastMuscle] || levelRulesForPin.lastMuscle;
+        const lastEx = exercises[exercises.length - 1];
+        if (lastEx.primaryMuscle !== lastMuscleLabel) {
+          const swapIdx = exercises.findIndex(e => e.primaryMuscle === lastMuscleLabel);
+          if (swapIdx >= 0 && swapIdx !== exercises.length - 1) {
+            const tmp = exercises[exercises.length - 1];
+            exercises[exercises.length - 1] = exercises[swapIdx];
+            exercises[swapIdx] = tmp;
+          }
         }
       }
     }
@@ -976,6 +1169,10 @@ export function generatePlan(args: GeneratePlanArgs): PlanDay[] {
       // keeps serialized plans clean and means stored pre-v4 rows compare
       // equal to fresh v4 non-deload generations.
       ...(isDeloadWeek ? { deload: true as const } : {}),
+      // Stamp blockWeek only when the day went through the engine — the
+      // ramp phase is meaningful there. Fallback (general lane) days leave
+      // it undefined to preserve pre-v8 output shape for existing users.
+      ...(engineStructure ? { blockWeek: blockWeekInLoop as BlockWeek } : {}),
     });
     }
   }

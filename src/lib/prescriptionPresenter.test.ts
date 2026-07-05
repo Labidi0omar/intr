@@ -330,5 +330,154 @@ describe('buildPrescriptionHero', () => {
       }
     }
   });
+
+  // ── anchorSeed attribution ("based on your 100×5") ────────────────────
+  // Part E of the anchor-seed feature: when a prescription's entire
+  // history is a single onboarding-seeded anchor entry, the reason names
+  // it — so the first number the user sees visibly ties back to what they
+  // typed at onboarding. app/workout.tsx is responsible for only passing
+  // anchorSeed while that seed is still the lift's sole history (see the
+  // exerciseHistory-length check next to the hero render); the presenter
+  // itself just appends the note whenever it's given one.
+
+  describe('anchorSeed attribution', () => {
+    it('appends "Based on your {kg}×{reps}." to the reason when anchorSeed is set', () => {
+      const h = buildPrescriptionHero({
+        rx: { suggestedWeightKg: 85, deltaPct: 0.025, rationale: 'progress', cause: 'rir' },
+        lastWeightKg: 82.5,
+        hasLastRir: true,
+        anchorSeed: { weightKg: 100, reps: 5 },
+      });
+      expect(h.reason).toMatch(/up to 85 kg/i);
+      expect(h.reason).toContain('Based on your 100×5.');
+    });
+
+    it('formats the anchor weight the same way as the headline kg (no trailing .0)', () => {
+      const h = buildPrescriptionHero({
+        rx: { suggestedWeightKg: 85, deltaPct: 0.025, rationale: 'hold', cause: 'rir' },
+        lastWeightKg: 82.5,
+        hasLastRir: true,
+        anchorSeed: { weightKg: 102.5, reps: 5 },
+      });
+      expect(h.reason).toContain('Based on your 102.5×5.');
+    });
+
+    it('does NOT append anything when anchorSeed is absent (the default, common case)', () => {
+      const h = buildPrescriptionHero({
+        rx: { suggestedWeightKg: 85, deltaPct: 0.025, rationale: 'progress', cause: 'rir' },
+        lastWeightKg: 82.5,
+        hasLastRir: true,
+      });
+      expect(h.reason).not.toMatch(/based on/i);
+    });
+
+    it('does NOT append when anchorSeed is explicitly null (workout.tsx passes null once a real session is logged)', () => {
+      const h = buildPrescriptionHero({
+        rx: { suggestedWeightKg: 85, deltaPct: 0.025, rationale: 'progress', cause: 'rir' },
+        lastWeightKg: 82.5,
+        hasLastRir: true,
+        anchorSeed: null,
+      });
+      expect(h.reason).not.toMatch(/based on/i);
+    });
+
+    it('the attribution is exactly one short trailing sentence, not a wall of text', () => {
+      const h = buildPrescriptionHero({
+        rx: { suggestedWeightKg: 85, deltaPct: 0.025, rationale: 'progress', cause: 'rir' },
+        lastWeightKg: 82.5,
+        hasLastRir: true,
+        anchorSeed: { weightKg: 100, reps: 5 },
+      });
+      const sentences = h.reason.split(/(?<=[.!?])\s+/).filter(s => s.trim().length > 0);
+      // The causal reason + exactly one attribution sentence — two total,
+      // never more, and the attribution is always the LAST one.
+      expect(sentences.length).toBe(2);
+      expect(sentences[1]).toBe('Based on your 100×5.');
+    });
+  });
+
+  // ── derivedEstimate ("≈70kg, estimated from your bench") ──────────────
+  // The anchor-derivation feature: a lift with no rx and no lastWeightKg
+  // (a true cold start) but a same-session estimate from a DIFFERENT
+  // anchor lift (src/lib/anchorDerivation.ts). Must read distinctly
+  // softer than anchorSeed's confident "based on your 100×5" — no bold
+  // headline weightLabel, the number only appears inside the "≈...kg"
+  // reason sentence.
+
+  describe('derivedEstimate', () => {
+    it('renders "≈{kg}kg, estimated from your {basis} — calibrate as you go." on the cold-start (undefined rx) path', () => {
+      const h = buildPrescriptionHero({
+        rx: undefined,
+        derivedEstimate: { weightKg: 70, basisLabel: 'bench' },
+      });
+      expect(h.tone).toBe('cold');
+      expect(h.reason).toBe('≈70kg, estimated from your bench — calibrate as you go.');
+    });
+
+    it('renders on the no_history rationale path too', () => {
+      const h = buildPrescriptionHero({
+        rx: { suggestedWeightKg: 0, deltaPct: 0, rationale: 'no_history', cause: 'unknown' },
+        derivedEstimate: { weightKg: 45, basisLabel: 'row' },
+      });
+      expect(h.reason).toBe('≈45kg, estimated from your row — calibrate as you go.');
+    });
+
+    it('does NOT show a bold headline weightLabel — the estimate lives only in the reason sentence', () => {
+      const h = buildPrescriptionHero({
+        rx: undefined,
+        derivedEstimate: { weightKg: 70, basisLabel: 'bench' },
+      });
+      // Deliberately distinct from a real prescription or an anchored
+      // lift, both of which populate weightLabel with the bold headline
+      // number. A guess must never carry that same visual confidence.
+      expect(h.weightLabel).toBe('');
+      expect(h.deltaLabel).toBe('');
+    });
+
+    it('formats a fractional estimate without a trailing .0, same as every other kg label', () => {
+      const h = buildPrescriptionHero({
+        rx: undefined,
+        derivedEstimate: { weightKg: 77.5, basisLabel: 'bench' },
+      });
+      expect(h.reason).toContain('≈77.5kg');
+    });
+
+    it('falls back to the bare COPY_COLD_START when derivedEstimate is absent (the common case)', () => {
+      const h = buildPrescriptionHero({ rx: undefined });
+      expect(h.reason).toMatch(/first time on this/i);
+      expect(h.reason).not.toMatch(/estimated from/i);
+    });
+
+    it('falls back to the bare COPY_COLD_START when derivedEstimate is explicitly null', () => {
+      const h = buildPrescriptionHero({ rx: undefined, derivedEstimate: null });
+      expect(h.reason).toMatch(/first time on this/i);
+    });
+
+    it('falls back to the bare COPY_COLD_START when derivedEstimate has a non-positive weight (defensive)', () => {
+      const h = buildPrescriptionHero({ rx: undefined, derivedEstimate: { weightKg: 0, basisLabel: 'bench' } });
+      expect(h.reason).toMatch(/first time on this/i);
+    });
+
+    it('is textually distinct from the anchorSeed "based on" line — never uses the word "based"', () => {
+      const h = buildPrescriptionHero({
+        rx: undefined,
+        derivedEstimate: { weightKg: 70, basisLabel: 'bench' },
+      });
+      expect(h.reason).not.toMatch(/based on/i);
+      expect(h.reason).toMatch(/estimated from/i);
+      expect(h.reason).toMatch(/calibrate as you go/i);
+    });
+
+    it('ignores derivedEstimate once a real prescription exists (rx present takes the normal path)', () => {
+      const h = buildPrescriptionHero({
+        rx: { suggestedWeightKg: 85, deltaPct: 0.025, rationale: 'progress', cause: 'rir' },
+        lastWeightKg: 82.5,
+        hasLastRir: true,
+        derivedEstimate: { weightKg: 70, basisLabel: 'bench' },
+      });
+      expect(h.reason).not.toMatch(/estimated from/i);
+      expect(h.weightLabel).toBe('85 kg');
+    });
+  });
 });
 

@@ -64,12 +64,28 @@ interface EdgePhraseResponse {
  *   v1 — initial: ≤160-char length cap, no-invent / no-emoji / no-bang.
  *   v2 — ≤90-char hero cap; validator additionally requires a forward
  *        directive cue (no description-only lines).
- *   v3 — current: ≤130-char hero cap; exclamation allowed on milestones;
+ *   v3 — ≤130-char hero cap; exclamation allowed on milestones;
  *        rhetorical questions accepted as a forward cue. Prompt rewritten
  *        with few-shot examples and a warmer voice. userName added to the
  *        payload for light personalization.
+ *   v4 — goal-aware programming. Baselines built from the goal pools
+ *        carry lane-correct dose language ("one in the tank" for
+ *        strength, "add a rep before a plate" for muscle). Prompt tells
+ *        the model the lane may appear in facts so the voice matches.
+ *   v5 — `general` reverted to a pass-through lane (no lane directive in
+ *        the pool; catalog dose flows through unchanged). Strength ladder
+ *        widened — RIR 1 is now a hold, not a small backoff.
+ *   v6 — current: volume-ramp coach. block_position observations widened
+ *        from wk3/4 to wk1/2/3/4 for the muscle lane so the coach speaks
+ *        to the intro / build / peak / deload phases. Prompt teaches the
+ *        model the ramp meaning (build weeks = MORE SETS, not more weight)
+ *        so a muscle-lane wk2 rephrase can't wrongly say "add a plate."
+ *        Any cached v5 line for block-1 / block-2 factSigs simply never
+ *        existed (those observations didn't fire before), so the cache
+ *        bump is protective rather than corrective — but v5 wk3/4 lines
+ *        would still work fine, so the bump is a conservative choice.
  */
-export const COACH_VOICE_PROMPT_VERSION = 3;
+export const COACH_VOICE_PROMPT_VERSION = 6;
 const CACHE_KEY_PREFIX = `coachVoiceAI:v${COACH_VOICE_PROMPT_VERSION}:`;
 const DEFAULT_TIMEOUT_MS = 6000;
 // The hero shows ONE line at editorial scale. Bumped from 90 → 130 (v3)
@@ -129,7 +145,8 @@ export function allowedNumbersFor(obs: Observation): Set<string> {
       break;
     case 'block_position':
       // "Week N of 4" is the canonical phrasing — both N and 4 are
-      // legitimate even though 4 isn't a fact per se.
+      // legitimate even though 4 isn't a fact per se. blockWeek can now
+      // be 1..4 (v8 widening for the muscle-lane ramp).
       add(obs.blockWeek, 4);
       break;
     case 'effort_zone':
@@ -280,8 +297,14 @@ function factsFor(obs: Observation): Record<string, string | number> {
       return { lift: obs.lift, newKg: obs.newKg, prevKg: obs.prevKg };
     case 'consistency':
       return { count: obs.count, denom: obs.metric === 'days14' ? 14 : 28 };
-    case 'block_position':
-      return { blockWeek: obs.blockWeek };
+    case 'block_position': {
+      // Forward the goal for wk1/2 so the rephraser knows to use the
+      // volume-ramp voice (build weeks = MORE SETS, not more weight).
+      // Weeks 3/4 keep the pre-v8 shape when goal is absent.
+      const out: Record<string, string | number> = { blockWeek: obs.blockWeek };
+      if (obs.goal) out.goal = obs.goal;
+      return out;
+    }
     case 'effort_zone':
       return { pctInt: Math.round(obs.pct * 100), band: obs.band };
     case 'dialed_in':

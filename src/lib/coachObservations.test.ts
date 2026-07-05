@@ -277,6 +277,49 @@ describe('buildConsistency', () => {
 
 // ── blockPosition ───────────────────────────────────────────────────────
 
+describe('buildBlockPosition — muscle-lane ramp wk1/wk2 gating (v8)', () => {
+  it('wk1 without goal → null (pre-v8 contract preserved)', () => {
+    expect(buildBlockPosition(1, TODAY)).toBeNull();
+    expect(buildBlockPosition(2, TODAY)).toBeNull();
+  });
+
+  it('wk1 with goal="muscle" → observation with intro salience 0.5', () => {
+    const obs = buildBlockPosition(1, TODAY, 'muscle');
+    expect(obs).not.toBeNull();
+    expect(obs!.blockWeek).toBe(1);
+    expect(obs!.goal).toBe('muscle');
+    expect(obs!.salience).toBe(0.5);
+    // factSig carries goal so switching lanes mid-block advances the sig.
+    expect(obs!.factSig).toBe('block-1-gmuscle');
+  });
+
+  it('wk2 with goal="muscle" → observation with build salience 0.55', () => {
+    const obs = buildBlockPosition(2, TODAY, 'muscle');
+    expect(obs).not.toBeNull();
+    expect(obs!.blockWeek).toBe(2);
+    expect(obs!.salience).toBe(0.55);
+    expect(obs!.factSig).toBe('block-2-gmuscle');
+  });
+
+  it('wk1/wk2 with goal="strength" → null (strength has no volume ramp to narrate)', () => {
+    expect(buildBlockPosition(1, TODAY, 'strength')).toBeNull();
+    expect(buildBlockPosition(2, TODAY, 'strength')).toBeNull();
+  });
+
+  it('wk1/wk2 with goal="general" → null (general is a pure passthrough lane)', () => {
+    expect(buildBlockPosition(1, TODAY, 'general')).toBeNull();
+    expect(buildBlockPosition(2, TODAY, 'general')).toBeNull();
+  });
+
+  it('wk3/wk4 factSigs are UNCHANGED regardless of goal (dedup continuity with pre-v8 stored messages)', () => {
+    expect(buildBlockPosition(3, TODAY, 'muscle')!.factSig).toBe('block-3');
+    expect(buildBlockPosition(3, TODAY, 'strength')!.factSig).toBe('block-3');
+    expect(buildBlockPosition(3, TODAY, null)!.factSig).toBe('block-3');
+    expect(buildBlockPosition(4, TODAY, 'muscle')!.factSig).toBe('block-4');
+    expect(buildBlockPosition(4, TODAY, 'strength')!.factSig).toBe('block-4');
+  });
+});
+
 describe('buildBlockPosition', () => {
   it('fires on week 3 and week 4 only', () => {
     expect(buildBlockPosition(3, TODAY)!.factSig).toBe('block-3');

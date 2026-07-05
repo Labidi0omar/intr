@@ -23,6 +23,7 @@ import {
   type PlanDay,
   type SplitId,
 } from '../lib/planGeneration';
+import type { Goal } from '../lib/goalProfile';
 import { weekdaysToOffsets } from './trainingWeekdays';
 
 export interface BuildCatchUpRowsArgs {
@@ -43,6 +44,10 @@ export interface BuildCatchUpRowsArgs {
    *  generatePlan so a resume/catch-up keeps the user's split — not a
    *  days-derived one. Omitted → generatePlan falls back to splitForDays. */
   split?: SplitId;
+  /** The user's training goal (profiles.goal). Passed straight to
+   *  generatePlan so a resume/catch-up keeps the user's lane. Omitted →
+   *  catalog reps/rest/sets (back-compat with older callers / tests). */
+  goal?: Goal;
   /** Last 4 weeks of plan history for the generator's variety scoring.
    *  Passed straight through to generatePlan. */
   planHistory?: { exercises: string[] }[];
@@ -185,6 +190,7 @@ export function buildCatchUpRows(args: BuildCatchUpRowsArgs): CatchUpRowsResult 
       trainingDays: args.trainingDays,
       location: args.location,
       split: args.split,
+      goal: args.goal,
       planHistory: args.planHistory,
       selectedDayOffsets: consecutiveOffsets,
       weeksAhead: catchUpWeeks,
@@ -224,6 +230,7 @@ export function buildCatchUpRows(args: BuildCatchUpRowsArgs): CatchUpRowsResult 
     trainingDays: args.trainingDays,
     location: args.location,
     split: args.split,
+    goal: args.goal,
     planHistory: args.planHistory,
     selectedDayOffsets: futureOffsets,
     weeksAhead: horizonWeeks,
@@ -299,6 +306,11 @@ export interface CanonicalWeekArgs {
    *  (date, workoutType) comparison in the self-heal would treat a correct row
    *  as deviating and rewrite it every open. Omitted → splitForDays default. */
   split?: SplitId;
+  /** The user's training goal. Passed through for completeness — irrelevant
+   *  to the self-heal comparison (which only checks date + workoutType), but
+   *  needed because deriveCanonicalWeek shares the generator and we want the
+   *  canonical week to carry the correct dose for consumers that read it. */
+  goal?: Goal;
   planHistory?: { exercises: string[] }[];
   blockIndex: number;
   blockWeek: number;
@@ -313,6 +325,7 @@ export function deriveCanonicalWeek(args: CanonicalWeekArgs): PlanDay[] {
     trainingDays: args.trainingDays,
     location: args.location,
     split: args.split,
+    goal: args.goal,
     planHistory: args.planHistory,
     selectedDayOffsets: args.selectedDayOffsets ?? pickDefaultDayOffsets(args.trainingDays),
     weeksAhead: 1,

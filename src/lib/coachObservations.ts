@@ -122,7 +122,17 @@ export type ConsistencyObservation = BaseObs & {
 
 export type BlockPositionObservation = BaseObs & {
   type: 'block_position';
-  blockWeek: 3 | 4;
+  /** In-block week position. Widened from 3|4 → 1|2|3|4 in v8 to carry the
+   *  volume-ramp phase for the muscle lane (wk1 = intro / wk2 = build /
+   *  wk3 = peak / wk4 = deload). Wk1 and wk2 only fire when goal === 'muscle'
+   *  — the strength lane has no volume ramp to narrate, so its BLOCK
+   *  observations still start at wk3 (framing) and wk4 (deload earned). */
+  blockWeek: 1 | 2 | 3 | 4;
+  /** Goal lane at observation time. Optional so pre-v8 stored observations
+   *  and callers that don't pass it still deserialize; the phraser reads it
+   *  to pick the right pool (muscle ramp voice on wk1/2, existing pools
+   *  otherwise). */
+  goal?: 'strength' | 'muscle' | 'general' | null;
 };
 
 export type EffortZoneObservation = BaseObs & {
@@ -555,28 +565,56 @@ export function buildConsistency(
 }
 
 /**
- * Block position. Only weeks 3 ("last build before deload") and 4
- * ("deload earned") earn a line. Weeks 1–2 are silent.
+ * Block position — narrates where the user is in the 4-week mesocycle.
+ *
+ * Pre-v8 contract (goal absent or not 'muscle'): only weeks 3 ("last build
+ * before deload") and 4 ("deload earned") earn a line. Weeks 1–2 are silent
+ * — no volume ramp to speak to on the strength / general lanes.
+ *
+ * v8 (goal === 'muscle'): weeks 1–4 all earn a line, so the coach can
+ * narrate the volume ramp (wk1 intro → wk2 build → wk3 peak → wk4 deload).
+ * The intro / build reads have low salience so they only surface when
+ * nothing more actionable qualifies.
+ *
+ * Salience tiers:
+ *   wk4 → 0.95  protective (recovery week earned) — unchanged
+ *   wk3 → 0.7   mesocycle framing (last hard build) — unchanged
+ *   wk2 → 0.55  build week (muscle lane only)      — new
+ *   wk1 → 0.5   intro week  (muscle lane only)     — new
  */
 export function buildBlockPosition(
   blockWeek: number | null,
   todayIso: string,
+  goal?: 'strength' | 'muscle' | 'general' | null,
 ): BlockPositionObservation | null {
-  if (blockWeek !== 3 && blockWeek !== 4) return null;
-  // Week 4 = recovery week earned — PROTECTIVE tier (0.95). Leads the
-  // dashboard so the user sees the "ease up" signal before any bare
-  // lift description.
-  // Week 3 = last hard build before back-off — MESOCYCLE FRAMING tier
-  // (0.7). Useful context but below the actionable green-light reads
-  // (pushing_hard / back_on_track / stall).
-  const salience = blockWeek === 4 ? 0.95 : 0.7;
+  const wk = Number.isInteger(blockWeek) ? blockWeek : null;
+  if (wk !== 1 && wk !== 2 && wk !== 3 && wk !== 4) return null;
+  const isMuscleLane = goal === 'muscle';
+  // Weeks 1 and 2 only speak on the muscle lane — strength has no volume
+  // ramp to narrate here (progression is load-side, spoken by the lift
+  // progression observations).
+  if ((wk === 1 || wk === 2) && !isMuscleLane) return null;
+
+  let salience: number;
+  if (wk === 4) salience = 0.95;
+  else if (wk === 3) salience = 0.7;
+  else if (wk === 2) salience = 0.55;
+  else salience = 0.5;
+
+  // factSig carries the goal on wk1/2 so a user who switches from muscle
+  // to strength mid-block doesn't re-hear stale ramp copy (goal advances
+  // the sig). Weeks 3/4 keep the bare `block-N` sig to preserve dedup
+  // continuity with pre-v8 stored messages.
+  const factSig = wk <= 2 ? `block-${wk}-g${goal ?? 'x'}` : `block-${wk}`;
+
   return {
     type: 'block_position',
-    id: `block_position:${blockWeek}`,
-    factSig: `block-${blockWeek}`,
+    id: `block_position:${wk}`,
+    factSig,
     salience,
     eventDate: todayIso,
-    blockWeek,
+    blockWeek: wk as 1 | 2 | 3 | 4,
+    goal: goal ?? null,
   };
 }
 
@@ -1064,7 +1102,7 @@ export function deriveObservations(input: ObservationsInput): CoachObservation[]
   const cons = buildConsistency(input.trainedDays14, input.trainedDays28, input.todayIso);
   if (cons) out.push(cons);
 
-  const block = buildBlockPosition(input.blockWeek, input.todayIso);
+  const block = buildBlockPosition(input.blockWeek, input.todayIso, input.goal ?? null);
   if (block) out.push(block);
 
   const ez = buildEffortZone(input.effortZone, input.todayIso);

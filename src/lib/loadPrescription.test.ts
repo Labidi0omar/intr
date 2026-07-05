@@ -140,12 +140,17 @@ describe('prescribeLoad', () => {
     expect(rx.suggestedWeightKg).toBe(20);
   });
 
-  it('beginner backoff is unchanged (still -5%)', () => {
+  it('beginner RIR 0 is reframed as HOLD, not backoff (calibration damper)', () => {
+    // Deliberate v2 change: a beginner reporting "0 reps in reserve" is far
+    // more likely a miscalibrated 3-4 RIR than a true failure. The
+    // calibration damper (goal-aware engine) treats RIR 0 as hold in that
+    // window rather than backing off on unreliable data. Established
+    // lifters still get the -5% failure backoff.
     const rx = prescribeLoad({
       lastWeightKg: 100, lastRir: 0, energyScore: 3, isCompound: true, fitnessLevel: 'beginner',
     });
-    expect(rx.rationale).toBe('backoff');
-    expect(rx.suggestedWeightKg).toBe(95);
+    expect(rx.rationale).toBe('hold');
+    expect(rx.suggestedWeightKg).toBe(100);
   });
 
   // ── Plate rounding ──────────────────────────────────────────────────
@@ -489,5 +494,246 @@ describe('hitTargetZone', () => {
   });
   it('rir null → false', () => {
     expect(hitTargetZone(null)).toBe(false);
+  });
+
+  // ── Goal-aware target zones ───────────────────────────────────────────
+  // strength: 2-3 (stay fresher); muscle: 0-2 (proximity is the driver);
+  // general: 1-2 (current, unchanged).
+  it('strength: rir 1, 2, and 3 are on-target; only 0 (true failure) is off', () => {
+    expect(hitTargetZone(3, 'strength')).toBe(true);
+    expect(hitTargetZone(2, 'strength')).toBe(true);
+    expect(hitTargetZone(1, 'strength')).toBe(true);
+    expect(hitTargetZone(0, 'strength')).toBe(false);
+  });
+  it('muscle: rir 0, 1, 2 are on-target; 3+ is not', () => {
+    expect(hitTargetZone(0, 'muscle')).toBe(true);
+    expect(hitTargetZone(1, 'muscle')).toBe(true);
+    expect(hitTargetZone(2, 'muscle')).toBe(true);
+    expect(hitTargetZone(3, 'muscle')).toBe(false);
+  });
+  it('general: same as no-goal default (1-2 window)', () => {
+    expect(hitTargetZone(1, 'general')).toBe(true);
+    expect(hitTargetZone(2, 'general')).toBe(true);
+    expect(hitTargetZone(0, 'general')).toBe(false);
+    expect(hitTargetZone(3, 'general')).toBe(false);
+  });
+});
+
+// ── Goal-aware RIR ladder (new v2 behavior) ───────────────────────────────
+
+describe('prescribeLoad — strength ladder (target RIR 1-3)', () => {
+  it('RIR 3 progresses (+5% compound)', () => {
+    const rx = prescribeLoad({
+      lastWeightKg: 100, lastRir: 3, energyScore: 3, isCompound: true, goal: 'strength',
+    });
+    expect(rx.rationale).toBe('progress');
+    expect(rx.suggestedWeightKg).toBe(105);
+  });
+
+  it('RIR 2 HOLDS (target zone) — was small bump under general', () => {
+    // Under the general ladder, RIR 2 = small progress. On the strength
+    // lane the target range is wider: hold on a clean set with 2 in
+    // reserve, load moves only when there's plenty in the tank (RIR ≥ 3).
+    const rx = prescribeLoad({
+      lastWeightKg: 100, lastRir: 2, energyScore: 3, isCompound: true, goal: 'strength',
+    });
+    expect(rx.rationale).toBe('hold');
+    expect(rx.suggestedWeightKg).toBe(100);
+  });
+
+  it('RIR 1 HOLDS — a clean set with one in the tank is a good strength set', () => {
+    // A clean rep with 1 in reserve on a heavy compound is exactly the
+    // point of the strength lane. Prior behavior (v2 first pass) backed
+    // off 2.5% here — that punished a productive session. Corrected.
+    const rx = prescribeLoad({
+      lastWeightKg: 100, lastRir: 1, energyScore: 3, isCompound: true, goal: 'strength',
+    });
+    expect(rx.rationale).toBe('hold');
+    expect(rx.cause).toBe('rir');
+    expect(rx.suggestedWeightKg).toBe(100);
+  });
+
+  it('RIR 0 → full failure backoff (-5%) — only true failure drops load', () => {
+    const rx = prescribeLoad({
+      lastWeightKg: 100, lastRir: 0, energyScore: 3, isCompound: true, goal: 'strength',
+    });
+    expect(rx.rationale).toBe('backoff');
+    expect(rx.cause).toBe('failure');
+    expect(rx.suggestedWeightKg).toBe(95);
+  });
+});
+
+describe('prescribeLoad — muscle ladder mirrors current general behavior', () => {
+  it('RIR 2 progresses (+2.5% compound half-step)', () => {
+    const rx = prescribeLoad({
+      lastWeightKg: 100, lastRir: 2, energyScore: 3, isCompound: true, goal: 'muscle',
+    });
+    expect(rx.rationale).toBe('progress');
+    expect(rx.suggestedWeightKg).toBe(102.5);
+  });
+
+  it('RIR 1 holds', () => {
+    const rx = prescribeLoad({
+      lastWeightKg: 100, lastRir: 1, energyScore: 3, isCompound: true, goal: 'muscle',
+    });
+    expect(rx.rationale).toBe('hold');
+    expect(rx.suggestedWeightKg).toBe(100);
+  });
+
+  it('RIR 0 backs off -5% (grinded rep still lightens next session)', () => {
+    // Even though muscle's analytics target zone (hitTargetZone) includes
+    // RIR 0 as "on target," the ladder still treats a real failure as a
+    // signal to lighten — targeting failure and hitting it are different
+    // things in the gym.
+    const rx = prescribeLoad({
+      lastWeightKg: 100, lastRir: 0, energyScore: 3, isCompound: true, goal: 'muscle',
+    });
+    expect(rx.rationale).toBe('backoff');
+    expect(rx.cause).toBe('failure');
+    expect(rx.suggestedWeightKg).toBe(95);
+  });
+});
+
+// ── Calibration damper ───────────────────────────────────────────────────
+
+describe('prescribeLoad — calibration damper (novices + new-to-a-lift)', () => {
+  it('beginner: RIR 3 progresses with HALVED step (existing behavior, preserved)', () => {
+    // 100 * (1 + 0.025) = 102.5. Same math the original beginner damping
+    // provided — v2 keeps this and adds the RIR-0 reframe on top.
+    const rx = prescribeLoad({
+      lastWeightKg: 100, lastRir: 3, energyScore: 3, isCompound: true, fitnessLevel: 'beginner',
+    });
+    expect(rx.rationale).toBe('progress');
+    expect(rx.suggestedWeightKg).toBe(102.5);
+  });
+
+  it('first ≤ 3 sessions on a lift: same damper for intermediate users', () => {
+    // An intermediate lifter picking up a lift they've never done gets the
+    // damper too. RIR is noisy about the LIFT, not just about experience.
+    const rx = prescribeLoad({
+      lastWeightKg: 100, lastRir: 3, energyScore: 3, isCompound: true,
+      fitnessLevel: 'intermediate', sessionCountForLift: 1,
+    });
+    expect(rx.rationale).toBe('progress');
+    expect(rx.suggestedWeightKg).toBe(102.5);  // halved step (+2.5% not +5%)
+  });
+
+  it('sessionCountForLift ≥ 3 disengages the session-count damper', () => {
+    const rx = prescribeLoad({
+      lastWeightKg: 100, lastRir: 3, energyScore: 3, isCompound: true,
+      fitnessLevel: 'intermediate', sessionCountForLift: 3,
+    });
+    expect(rx.suggestedWeightKg).toBe(105);  // full +5% step
+  });
+
+  it('first ≤ 3 sessions on a lift: RIR 0 reframed as HOLD (miscalibration guard)', () => {
+    const rx = prescribeLoad({
+      lastWeightKg: 100, lastRir: 0, energyScore: 3, isCompound: true,
+      fitnessLevel: 'intermediate', sessionCountForLift: 2,
+    });
+    expect(rx.rationale).toBe('hold');
+    expect(rx.cause).toBe('rir');  // NOT failure
+    expect(rx.suggestedWeightKg).toBe(100);
+  });
+
+  it('experienced lifter, established lift: RIR 0 still IS failure', () => {
+    // Damper does not fire — the ladder's usual failure backoff stands.
+    const rx = prescribeLoad({
+      lastWeightKg: 100, lastRir: 0, energyScore: 3, isCompound: true,
+      fitnessLevel: 'intermediate', sessionCountForLift: 10,
+    });
+    expect(rx.rationale).toBe('backoff');
+    expect(rx.cause).toBe('failure');
+    expect(rx.suggestedWeightKg).toBe(95);
+  });
+});
+
+// ── Top-of-band gate (universal) ─────────────────────────────────────────
+
+describe('prescribeLoad — top-of-band gate', () => {
+  it('suppresses progress when lastReps < topReps (rep target not reached)', () => {
+    // Muscle lane, RIR 2 would normally progress +2.5%. But lastReps=10 in
+    // an 8-12 band → hold weight; nextVolumeStep tells the presenter to
+    // aim for 11 reps next session.
+    const rx = prescribeLoad({
+      lastWeightKg: 100, lastRir: 2, energyScore: 3, isCompound: true, goal: 'muscle',
+      lastReps: 10, topReps: 12,
+    });
+    expect(rx.rationale).toBe('hold');
+    expect(rx.suggestedWeightKg).toBe(100);
+  });
+
+  it('allows progress when lastReps === topReps (band topped)', () => {
+    const rx = prescribeLoad({
+      lastWeightKg: 100, lastRir: 2, energyScore: 3, isCompound: true, goal: 'muscle',
+      lastReps: 12, topReps: 12,
+    });
+    expect(rx.rationale).toBe('progress');
+    expect(rx.suggestedWeightKg).toBe(102.5);
+  });
+
+  it('strength: top-of-band gate holds even when RIR 3 (needs both signals)', () => {
+    // Strength ladder would normally progress at RIR 3, but if the user
+    // only hit 4 in a 3-5 band the load bump waits.
+    const rx = prescribeLoad({
+      lastWeightKg: 100, lastRir: 3, energyScore: 3, isCompound: true, goal: 'strength',
+      lastReps: 4, topReps: 5,
+    });
+    expect(rx.rationale).toBe('hold');
+  });
+
+  it('gate is off when either lastReps or topReps is missing (back-compat)', () => {
+    // No band info → legacy behavior (RIR ladder alone drives progress).
+    const rx = prescribeLoad({
+      lastWeightKg: 100, lastRir: 3, energyScore: 3, isCompound: true, goal: 'muscle',
+      lastReps: 8,
+    });
+    expect(rx.rationale).toBe('progress');
+  });
+
+  it('does not interfere with backoff (holds are downgrades, not upgrades)', () => {
+    // RIR 0 → failure backoff. Gate does not upgrade to hold — backoffs
+    // shouldn't be masked by "well, reps weren't at the top" logic.
+    const rx = prescribeLoad({
+      lastWeightKg: 100, lastRir: 0, energyScore: 3, isCompound: true, goal: 'muscle',
+      lastReps: 8, topReps: 12,
+    });
+    expect(rx.rationale).toBe('backoff');
+    expect(rx.suggestedWeightKg).toBe(95);
+  });
+
+  // ── Workout-screen contract: gate is INERT without lastReps ──────────
+  //
+  // Product cut: the workout screen no longer captures per-set reps from
+  // the user. app/workout.tsx intentionally OMITS `lastReps` from the
+  // prescribeLoad call. If the gate ever wrongly fired without a real
+  // signal, every session on every lift would silently freeze at 'hold'.
+  // These tests pin the "gate inert without lastReps" contract so a
+  // future refactor can't silently reintroduce the freeze.
+
+  it('workout call site: no lastReps, no topReps → clean RIR-3 progresses (no gate freeze)', () => {
+    // Exactly the shape prescribeLoad is called with in app/workout.tsx
+    // after the reps-logging cut: goal set, RIR captured, but neither
+    // lastReps nor topReps supplied. Must NOT downgrade to 'hold'.
+    for (const goal of ['strength', 'muscle', 'general'] as const) {
+      const rx = prescribeLoad({
+        lastWeightKg: 100, lastRir: 3, energyScore: 3, isCompound: true, goal,
+        // lastReps + topReps deliberately omitted — matches workout.tsx.
+      });
+      expect(rx.rationale).toBe('progress');
+      expect(rx.deltaPct).toBeGreaterThan(0);
+      expect(rx.suggestedWeightKg).toBeGreaterThan(100);
+    }
+  });
+
+  it('gate is inert when ONLY topReps is set (defensive — half the signal is not enough)', () => {
+    // A future refactor might pass topReps from the plan band without
+    // realising the workout screen no longer sources lastReps. That
+    // shouldn't hold weight — the gate needs BOTH inputs to fire.
+    const rx = prescribeLoad({
+      lastWeightKg: 100, lastRir: 2, energyScore: 3, isCompound: true, goal: 'muscle',
+      topReps: 12,
+    });
+    expect(rx.rationale).toBe('progress');
   });
 });

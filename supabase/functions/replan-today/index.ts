@@ -303,6 +303,18 @@ serve(async (req) => {
       return json({ error: `Safety check failed: ${safety.reason}`, keep_original: true }, 422);
     }
 
+    // Drop-guardrail telemetry. When the model removes exercises it wasn't
+    // supposed to (energy > 2, or below the low-energy floor), safety.ts
+    // restores them and reports the names here. Repeated non-empty logs
+    // are the signal that the prompt needs another pass — do not silence
+    // this. Tagged 'replan:dropGuard' to match reportSilent conventions on
+    // the client side even though this is server-side.
+    if (safety.restored && safety.restored.length > 0) {
+      console.warn(
+        `[replan:dropGuard] restored ${safety.restored.length} dropped exercise(s) at energy=${energyScore}: ${safety.restored.join(", ")}`
+      );
+    }
+
     const reasoning = typeof parsed.reasoning === "string"
       ? parsed.reasoning.slice(0, 200).trim()
       : "Adjusted for today's energy.";
