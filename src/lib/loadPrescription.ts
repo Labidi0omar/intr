@@ -119,8 +119,15 @@ export function roundToPlate(kg: number, step = 2.5): number {
 
 /** Threshold (in weeks) at which a clean, well-energised, would-hold lift
  *  earns a stall nudge — converts hold to a one-step progression with cause
- *  'time_to_progress'. See applyStallNudge. */
-export const STALL_WEEKS = 3;
+ *  'time_to_progress'. See applyStallNudge.
+ *
+ *  Lowered 3 → 2 in the deload-and-overload PR so the engine's load bump
+ *  fires on the SAME 2-week parked-window that the coach's "time to add
+ *  weight" nudge (progress_ready observation) triggers on. The shown weight
+ *  and the coach copy have to agree by construction — a coach line saying
+ *  "add a little" while the workout card still shows the same weight is
+ *  the kind of contradiction that erodes trust in the whole system. */
+export const STALL_WEEKS = 2;
 
 export function prescribeLoad(input: PrescriptionInput): Prescription {
   const {

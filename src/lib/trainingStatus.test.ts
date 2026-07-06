@@ -259,6 +259,80 @@ describe('computeTrainingStatus — new user / insufficient data', () => {
   });
 });
 
+describe('computeTrainingStatus — idle established user must NOT read recovering_well', () => {
+  // The regression the "absence of training ≠ green" gate exists to fix.
+  // The recovery half is a fatigue-SUBTRACTION model: an idle account has
+  // no fatigue signals to subtract, so before the gate a detrained user
+  // read as maximally recovered and the state floated to 🟢. Under the fix
+  // the recovery half caps at the neutral middle when there aren't enough
+  // recent sessions to have accumulated fatigue.
+
+  it('established user, 0 recent sessions, no fatigue → NOT recovering_well (idle-green bug)', () => {
+    // lifetimeCompletedSessions clears calibration so we don't early-return
+    // 'unknown'. completedSessions (recent window) is 0 — the fix must fire.
+    const r = computeTrainingStatus(inputs({
+      liftDeltas: [], // nothing to compare in the recent window
+      completedSessions: 0,
+      plannedSessions: 4,
+      lifetimeCompletedSessions: 30,
+      lowEnergySessions: 0,
+      ratedEnergySessions: 0,
+      ratedSets: 0,
+      rirMissSets: 0,
+    }));
+    // Score computes, but the recovery cap keeps us out of 🟢.
+    expect(r.score).not.toBeNull();
+    expect(r.state).not.toBe('recovering_well');
+    // Not slammed into 🔴 either — a legit deload / travel week must survive
+    // as 🟡 or 'unknown', never 🔴 backing_off just from being idle.
+    expect(r.state).not.toBe('backing_off');
+    // Copy is honest about no recent sessions.
+    expect(r.reason.toLowerCase()).toContain('no recent sessions');
+  });
+
+  it('established user, TRAINED + progressing + fresh → still recovering_well', () => {
+    // The bright-line other half: real recent training with clean signal
+    // still earns 🟢 after the fix. The gate must not cost a well-trained
+    // account its verdict.
+    const r = computeTrainingStatus(inputs({
+      liftDeltas: [
+        { name: 'Squat',    deltaKg: 5 },
+        { name: 'Bench',    deltaKg: 2.5 },
+        { name: 'Deadlift', deltaKg: 5 },
+      ],
+      completedSessions: 9,
+      plannedSessions: 10,
+      lifetimeCompletedSessions: 30,
+      lowEnergySessions: 0,
+      ratedEnergySessions: 6,
+      ratedSets: 20,
+      rirMissSets: 4, // 20% — on target
+    }));
+    expect(r.state).toBe('recovering_well');
+    expect(r.score).not.toBeNull();
+    expect(r.score!).toBeGreaterThan(70);
+  });
+
+  it('legit deload / travel week (1 recent session, no fatigue) reads 🟡 holding_steady, not 🔴', () => {
+    // Below the 2-session floor but with a REAL session in the window —
+    // could be a scheduled deload or a travel week. The state must NOT
+    // punish this into 🔴; it should land in 🟡 (or 'unknown' if truly
+    // starved) but stay honest about the low volume.
+    const r = computeTrainingStatus(inputs({
+      liftDeltas: [{ name: 'Squat', deltaKg: 0 }],
+      completedSessions: 1,
+      plannedSessions: 4,
+      lifetimeCompletedSessions: 40,
+      lowEnergySessions: 0,
+      ratedEnergySessions: 1,
+      ratedSets: 3, // below MIN_RATED_SETS, so effort is "no signal"
+      rirMissSets: 0,
+    }));
+    expect(r.state).not.toBe('backing_off');
+    expect(r.state).not.toBe('recovering_well');
+  });
+});
+
 describe('computeTrainingStatus — robustness', () => {
   it('never throws on garbage / negative inputs', () => {
     const r = computeTrainingStatus(
@@ -304,6 +378,103 @@ describe('decideDeloadOffer', () => {
   it('null/out-of-range blockWeek → no offer', () => {
     expect(decideDeloadOffer({ state: 'backing_off', blockWeek: null, activeIsDeload: false })).toBeNull();
     expect(decideDeloadOffer({ state: 'recovering_well', blockWeek: 9, activeIsDeload: true })).toBeNull();
+  });
+
+  // ── Training-floor gate (Part 2) ────────────────────────────────────────
+  // The calendar advances blockWeek even if the user didn't train. Without
+  // this gate an idle account rolling into week 4 gets offered a "skip"
+  // against a deload it never earned. The recentCompletedSessions floor
+  // (DELOAD_TRAINING_FLOOR = 3) closes that.
+
+  it('idle account at week 4 with active deload → null (the reported bug)', () => {
+    // The exact regression the gate exists to fix. Even if state has floated
+    // to recovering_well from Part 1's cap (or wasn't fully repaired), zero
+    // recent training must produce no offer.
+    expect(
+      decideDeloadOffer({
+        state: 'recovering_well',
+        blockWeek: 4,
+        activeIsDeload: true,
+        recentCompletedSessions: 0,
+      }),
+    ).toBeNull();
+    // Same holds when state is holding_steady (the post-Part-1 idle read).
+    expect(
+      decideDeloadOffer({
+        state: 'holding_steady',
+        blockWeek: 4,
+        activeIsDeload: true,
+        recentCompletedSessions: 0,
+      }),
+    ).toBeNull();
+  });
+
+  it('below floor at any block week → null (no early offer for idle either)', () => {
+    expect(
+      decideDeloadOffer({
+        state: 'backing_off',
+        blockWeek: 2,
+        activeIsDeload: false,
+        recentCompletedSessions: 1,
+      }),
+    ).toBeNull();
+  });
+
+  it('consistently-training green user at week 4 → still offers skip (gate passes)', () => {
+    // The bright-line counter-check: the gate must NOT rob a real trained
+    // account of its skip offer.
+    expect(
+      decideDeloadOffer({
+        state: 'recovering_well',
+        blockWeek: 4,
+        activeIsDeload: true,
+        recentCompletedSessions: 6,
+      }),
+    ).toBe('skip');
+  });
+
+  it('consistently-training 🔴 user pre-week-4 → still offers early (gate passes)', () => {
+    expect(
+      decideDeloadOffer({
+        state: 'backing_off',
+        blockWeek: 3,
+        activeIsDeload: false,
+        recentCompletedSessions: 5,
+      }),
+    ).toBe('early');
+  });
+
+  it('state=unknown suppresses the offer even when the training floor is met', () => {
+    // The block week could be a calendar artefact when the trend read isn't
+    // established yet. Don't offer a skip against a deload we can't verify
+    // was earned.
+    expect(
+      decideDeloadOffer({
+        state: 'unknown',
+        blockWeek: 4,
+        activeIsDeload: true,
+        recentCompletedSessions: 5,
+      }),
+    ).toBeNull();
+  });
+
+  it('legacy callers (no recentCompletedSessions) keep the pre-fix behavior', () => {
+    // Back-compat guard: existing dashboard wire-ups that haven't been updated
+    // still get the same 'skip' / 'early' / null decisions they did before.
+    expect(
+      decideDeloadOffer({
+        state: 'recovering_well',
+        blockWeek: 4,
+        activeIsDeload: true,
+      }),
+    ).toBe('skip');
+    expect(
+      decideDeloadOffer({
+        state: 'backing_off',
+        blockWeek: 3,
+        activeIsDeload: false,
+      }),
+    ).toBe('early');
   });
 });
 

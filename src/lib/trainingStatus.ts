@@ -123,6 +123,23 @@ const RIR_MISS_PENALTY_MAX = 28;
  *  effort signal is treated as "no signal", not as a problem. */
 const MIN_RATED_SETS = 4;
 
+/**
+ * Minimum recent completed sessions before the recovery half may claim full
+ * marks. The recovery half is a fatigue-SUBTRACTION model — an idle account
+ * has no fatigue to subtract, so absent this gate a user who hasn't trained
+ * at all reads as maximally recovered, and the state floats to 🟢 recovering_well.
+ *
+ * Below this floor, the recovery half is CAPPED at the neutral middle
+ * (RECOVERY_HALF_MAX / 2) — the read is "no evidence" rather than "well
+ * recovered." Combined with the neutral-ish performance half a detrained
+ * account lands in 🟡 holding_steady, never 🟢. That's the design goal:
+ * absence of training ≠ green (Part 1 of the strength-cap-and-deload PR).
+ *
+ * It is NOT a penalty — no extra points are subtracted, so a legit deload /
+ * travel / illness week never falls into 🔴 backing_off.
+ */
+const RECOVERY_FULL_MARKS_TRAINING_FLOOR = 2;
+
 // Band → state. Single source of truth: the state is ALWAYS the band of the
 // score, so the number and the label can never disagree.
 /** score < this → 🔴 backing_off. */
@@ -241,6 +258,16 @@ export function computeTrainingStatus(inputsRaw: TrainingStatusInputs): Training
   // ── Recovery half (0–50): full marks minus repeated-fatigue penalties ───
   // The first low day is free; each repeat costs. A miss rate under the
   // tolerance costs nothing; only the excess is penalized.
+  //
+  // "Absence of training ≠ green" gate (see RECOVERY_FULL_MARKS_TRAINING_FLOOR):
+  // an idle account has no fatigue signals to subtract, so without a cap it
+  // would claim full recovery marks and float to 🟢. When recent completed
+  // sessions are below the floor we START from the neutral middle instead of
+  // RECOVERY_HALF_MAX — that's a "no evidence, no verdict" ceiling, NOT an
+  // added penalty, so a legit deload / travel / illness week can still show
+  // as 🟡 holding_steady rather than getting slammed into 🔴 backing_off.
+  const isTrainingRecently = completedSessions >= RECOVERY_FULL_MARKS_TRAINING_FLOOR;
+  const recoveryStart = isTrainingRecently ? RECOVERY_HALF_MAX : RECOVERY_HALF_MAX / 2;
   const lowEnergyPenalty = Math.min(
     LOW_ENERGY_PENALTY_MAX,
     Math.max(0, lowEnergySessions - LOW_ENERGY_FREE) * LOW_ENERGY_PENALTY_PER,
@@ -248,7 +275,7 @@ export function computeTrainingStatus(inputsRaw: TrainingStatusInputs): Training
   const rirMissPenalty = hasEffortSignal
     ? Math.min(RIR_MISS_PENALTY_MAX, RIR_MISS_PENALTY_SCALE * Math.max(0, rirMissRate - RIR_MISS_TOLERANCE))
     : 0;
-  const recoveryHalf = clamp(RECOVERY_HALF_MAX - lowEnergyPenalty - rirMissPenalty, 0, RECOVERY_HALF_MAX);
+  const recoveryHalf = clamp(recoveryStart - lowEnergyPenalty - rirMissPenalty, 0, RECOVERY_HALF_MAX);
 
   const score = Math.round(clamp(performanceHalf + recoveryHalf, 0, 100));
   const state = bandState(score);
@@ -275,11 +302,14 @@ export function computeTrainingStatus(inputsRaw: TrainingStatusInputs): Training
   })();
 
   // Recovery side (the recovery half). Honest even on a high score: if energy
-  // dipped repeatedly we say so rather than claim it's steady.
+  // dipped repeatedly we say so rather than claim it's steady. When the user
+  // has been detrained (recovery-half cap fired), don't claim "energy's
+  // steady" — there are no recent sessions to read energy from.
   const recoveryClause = (() => {
     if (lowEnergyRepeated && rirMissesHigh) return `energy's down ${lowEnergySessions} sessions and targets are slipping`;
     if (lowEnergyRepeated) return `energy's dipped ${lowEnergySessions} sessions`;
     if (rirMissesHigh) return "you're missing the target zone";
+    if (!isTrainingRecently) return "no recent sessions to read";
     return "energy's steady";
   })();
 
@@ -314,6 +344,13 @@ function cap(s: string): string {
 
 export type DeloadOffer = 'early' | 'skip' | null;
 
+/** Minimum real completed sessions in the trailing block-window before the
+ *  deload offer surfaces. A deload only makes sense once the user has
+ *  actually accumulated training fatigue — an idle account rolling into
+ *  its calendar week 4 must NOT be offered a "skip" (or "early") because
+ *  it has nothing to deload from. Same rationale as Part 1's recovery cap. */
+export const DELOAD_TRAINING_FLOOR = 3;
+
 export interface DeloadDecisionInputs {
   state: TrainingStatusState;
   /** In-block week (1–4) of the active week. null when unknown — no offer. */
@@ -322,6 +359,20 @@ export interface DeloadDecisionInputs {
    *  early offer so we never offer to "pull forward" a deload that's already
    *  here. */
   activeIsDeload: boolean;
+  /** Real completed non-recovery sessions in the trailing block window
+   *  (typically the same figure as TrainingStatusInputs.completedSessions).
+   *  Below DELOAD_TRAINING_FLOOR the offer is suppressed regardless of
+   *  state — "no training in the block ⇒ no deload offer, full stop."
+   *  Optional so legacy callers don't crash; when omitted the offer skips
+   *  the gate (back-compat behavior). New callers MUST wire this. */
+  recentCompletedSessions?: number;
+  /** Count of lifts with positive weight delta in the recent window
+   *  (from TrainingStatusResult.liftsProgressing). Optional. Currently used
+   *  only for defensive reason-copy in tests; the primary gate is
+   *  recentCompletedSessions. Included on the interface so future
+   *  refinements ("no offer without any lift moving") don't require another
+   *  API change. */
+  liftsProgressing?: number;
 }
 
 /**
@@ -333,11 +384,28 @@ export interface DeloadDecisionInputs {
  *             yet — offer to pull the deload forward to now.
  *   null    — nothing to offer.
  *
+ * NEW GATE (Part 2): the block-week counter advances on the CALENDAR, so
+ * an idle account rolling into "week 4" with no training will be offered a
+ * skip against a deload that never earned itself. The
+ * recentCompletedSessions gate ensures we only surface either offer when
+ * the user actually trained during the block.
+ *
  * Pure. Never auto-acts.
  */
 export function decideDeloadOffer(input: DeloadDecisionInputs): DeloadOffer {
-  const { state, blockWeek, activeIsDeload } = input;
+  const { state, blockWeek, activeIsDeload, recentCompletedSessions } = input;
   if (blockWeek == null || blockWeek < 1 || blockWeek > 4) return null;
+
+  // No training in the block → no offer, full stop. Wired callers (home.tsx)
+  // must pass this; legacy callers that don't get the pre-fix behavior.
+  if (recentCompletedSessions != null && recentCompletedSessions < DELOAD_TRAINING_FLOOR) {
+    return null;
+  }
+
+  // Even when the training floor is met, a detrained 'unknown' state (no
+  // real trend to read) means we don't know what to offer. The block week
+  // could be a calendar artefact; keep the card quiet.
+  if (state === 'unknown') return null;
 
   // Skip is only ever offered when the schedule has actually put the user
   // INTO the deload week and the trend is strongly positive.

@@ -75,17 +75,26 @@ interface EdgePhraseResponse {
  *   v5 — `general` reverted to a pass-through lane (no lane directive in
  *        the pool; catalog dose flows through unchanged). Strength ladder
  *        widened — RIR 1 is now a hold, not a small backoff.
- *   v6 — current: volume-ramp coach. block_position observations widened
- *        from wk3/4 to wk1/2/3/4 for the muscle lane so the coach speaks
- *        to the intro / build / peak / deload phases. Prompt teaches the
- *        model the ramp meaning (build weeks = MORE SETS, not more weight)
- *        so a muscle-lane wk2 rephrase can't wrongly say "add a plate."
- *        Any cached v5 line for block-1 / block-2 factSigs simply never
- *        existed (those observations didn't fire before), so the cache
- *        bump is protective rather than corrective — but v5 wk3/4 lines
- *        would still work fine, so the bump is a conservative choice.
+ *   v6 — volume-ramp coach. block_position observations widened from
+ *        wk3/4 to wk1/2/3/4 for the muscle lane so the coach speaks to the
+ *        intro / build / peak / deload phases. Prompt teaches the model
+ *        the ramp meaning (build weeks = MORE SETS, not more weight) so a
+ *        muscle-lane wk2 rephrase can't wrongly say "add a plate."
+ *   v7 — progress_ready ("time to add weight") nudge. New observation with
+ *        a strict trigger (today energy ≥ 4 + lift parked ≥ 2 weeks + last
+ *        set not RIR 0). Prompt teaches the model that this observation
+ *        ALWAYS points the user AT a load bump — the opposite of a hold /
+ *        back-off read — so a wrong rephrase like "hold the load" would
+ *        contradict the engine's actual bump.
+ *   v8 — current: deload_offer + deload_heads_up. deload_offer surfaces
+ *        the decideDeloadOffer 'skip' / 'early' action as a coach message
+ *        with an embedded accept button on the dashboard — the rephrase
+ *        MUST end with a "tap" cue. deload_heads_up narrates an imminent
+ *        scheduled deload (~1 week out) — narration only, no "tap".
+ *        Prompt separates the two so the model can't blur an offer into
+ *        a heads-up (and lose the accept prompt) or vice versa.
  */
-export const COACH_VOICE_PROMPT_VERSION = 6;
+export const COACH_VOICE_PROMPT_VERSION = 8;
 const CACHE_KEY_PREFIX = `coachVoiceAI:v${COACH_VOICE_PROMPT_VERSION}:`;
 const DEFAULT_TIMEOUT_MS = 6000;
 // The hero shows ONE line at editorial scale. Bumped from 90 → 130 (v3)
@@ -175,6 +184,24 @@ export function allowedNumbersFor(obs: Observation): Set<string> {
       // No facts; allow 2 (weeks) and 14 (days) so variants can mention
       // the calibration window without tripping the digit guard.
       add(2, 14);
+      break;
+    case 'progress_ready':
+      // Named lift + parked weight + weeks-on-hold. The AI may reference
+      // any of them; nothing else is allowed (the "add a little" copy
+      // deliberately doesn't quote a delta — the engine picks the actual
+      // bump kg, not the coach line).
+      add(obs.weight, obs.weeks);
+      break;
+    case 'deload_offer':
+      // Offer copy names an action ("skip" / "pull it forward"); no
+      // numeric facts. Allow the constant 4 so the AI can reference
+      // "week 4" if it wants to (matches block_position vocabulary).
+      add(4);
+      break;
+    case 'deload_heads_up':
+      // Day countdown to the scheduled deload. The number IS the fact —
+      // the AI may quote it exactly, nothing else.
+      add(obs.deloadInDays);
       break;
   }
   return out;
@@ -327,6 +354,13 @@ function factsFor(obs: Observation): Record<string, string | number> {
     }
     case 'calibration':
       return {};
+    case 'progress_ready':
+      return { lift: obs.lift, weight: obs.weight, weeks: obs.weeks };
+    case 'deload_offer':
+      // Send the action so the AI can differentiate skip vs. early copy.
+      return { action: obs.action };
+    case 'deload_heads_up':
+      return { deloadInDays: obs.deloadInDays };
   }
 }
 

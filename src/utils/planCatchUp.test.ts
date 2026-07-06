@@ -859,3 +859,192 @@ describe('buildCatchUpRows — stable 7-day grid (gridAnchor)', () => {
     }
   });
 });
+
+// ── Earned-deload gate (Root Cause fix) ─────────────────────────────────
+// Every write path (planSync main loop, self-heal derivation, catch-up
+// resume) is supposed to funnel its (blockIndex, blockWeek) through
+// src/lib/blockPosition.ts::resolveBlockPosition. These fixtures pin the
+// end-to-end shape of the materialized week for each ROOT scenario the
+// spec lists.
+
+describe('resume path: idle-returner catch-up does NOT materialize a phantom deload', () => {
+  it('returning idle user AT calendar wk4 → future segment has NO deload day', () => {
+    // Simulate the exact failure the PR set out to fix: the user's plan
+    // anchor was 3 calendar weeks ago (blockIndex 0 wk 4 on the calendar),
+    // they haven't trained the block (blockCompletedSessions=0), and they
+    // just resumed. The resume pack MUST NOT emit a deload week — under
+    // the gate, calendar wk4 resets to (blockIndex+1, wk1).
+    const { rows } = buildCatchUpRows({
+      ...baseArgs,
+      backlogN: 0, // pure skip-ahead resume
+      mesocyclePosition: 0,
+      blockIndex: 0,
+      blockWeek: 4, // caller already-resolved via resolveBlockPosition
+      blockCompletedSessions: 0,
+    });
+    for (const row of rows) {
+      for (const day of row.planDays) {
+        expect(day.deload).not.toBe(true);
+      }
+    }
+  });
+
+  it('returning idle user with a backlog: neither catch-up nor future has a deload day', () => {
+    // Caller (home.tsx) applies resolveBlockPosition BEFORE invoking
+    // buildCatchUpRows — so an idle returner rolling into calendar wk4
+    // arrives with (blockIndex+1, wk1), not raw (blockIndex, wk4). The
+    // catch-up segment uses those inputs directly and the future segment
+    // gates each week internally via blockCompletedSessions.
+    const { rows } = buildCatchUpRows({
+      ...baseArgs,
+      backlogN: 2,
+      mesocyclePosition: 0,
+      blockIndex: 1, // post-reset (caller applied the gate)
+      blockWeek: 1,  // post-reset
+      blockCompletedSessions: 0,
+    });
+    const flat = flatten(rows);
+    expect(flat.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      for (const day of row.planDays) {
+        expect(day.deload).not.toBe(true);
+      }
+    }
+  });
+
+  it('legacy caller (no blockCompletedSessions) keeps the old single-batch behaviour', () => {
+    // Back-compat: any test/caller that doesn't pass the count still
+    // generates future segment in one call and materializes wk4 as a
+    // deload if the caller supplied blockWeek=4.
+    const { rows } = buildCatchUpRows({
+      ...baseArgs,
+      backlogN: 0,
+      mesocyclePosition: 0,
+      blockIndex: 0,
+      blockWeek: 4,
+      // blockCompletedSessions deliberately omitted
+    });
+    // The first week's days should carry deload:true (raw calendar wk4).
+    const firstRowDays = rows[0].planDays;
+    expect(firstRowDays.some(d => d.deload === true)).toBe(true);
+  });
+});
+
+describe('deriveCanonicalWeek: honors the caller-resolved position (earned vs unearned)', () => {
+  // planSync's caller applies resolveBlockPosition before invoking
+  // deriveCanonicalWeek, so this test exercises the shape the canonical
+  // takes at each side of the gate.
+
+  it('idle account, calendar wk4 → passed as (blockIndex+1, 1) → NON-deload canonical', () => {
+    // What planSync's resolvePosition returns for weeksFromAnchor=3 +
+    // blockCompletedSessions=0: { blockIndex: 1, blockWeek: 1 }. The
+    // derived canonical week that plays into the self-heal must NOT
+    // contain a deload day.
+    const canonical = deriveCanonicalWeek({
+      weekStartIso: '2026-06-06',
+      completedBeforeWeek: 0,
+      trainingDays: 3,
+      fitnessLevel: 'beginner',
+      location: 'gym',
+      blockIndex: 1, // post-reset
+      blockWeek: 1,  // post-reset
+    });
+    expect(canonical.length).toBeGreaterThan(0);
+    for (const day of canonical) {
+      expect(day.deload).not.toBe(true);
+    }
+  });
+
+  it('trained account, calendar wk4 → passed as (blockIndex, 4) → real deload canonical', () => {
+    // Same calendar position but with 5 completed sessions: the caller's
+    // resolvePosition yields {0, 4}. The canonical MUST still contain the
+    // deload — the gate doesn't rob a real trained block of its recovery.
+    const canonical = deriveCanonicalWeek({
+      weekStartIso: '2026-06-06',
+      completedBeforeWeek: 5,
+      trainingDays: 3,
+      fitnessLevel: 'beginner',
+      location: 'gym',
+      blockIndex: 0,
+      blockWeek: 4,
+    });
+    expect(canonical.length).toBeGreaterThan(0);
+    // Every generated day carries deload=true when blockWeek === 4.
+    for (const day of canonical) {
+      expect(day.deload).toBe(true);
+    }
+  });
+});
+
+describe('determinism: trained blocks still return identical lifts across weeks 1–3', () => {
+  it('same block, weeks 1/2/3 produce IDENTICAL exercise selection (progressive-overload substrate)', () => {
+    // The gate must not disturb the within-block substrate. Weeks 1–3 at
+    // the same blockIndex use the same seeded picker, so the exercise
+    // names are byte-identical (only sets/reps vary with the ramp).
+    const wk1 = deriveCanonicalWeek({
+      weekStartIso: '2026-06-01',
+      completedBeforeWeek: 0,
+      trainingDays: 3,
+      fitnessLevel: 'beginner',
+      location: 'gym',
+      blockIndex: 0,
+      blockWeek: 1,
+    });
+    const wk2 = deriveCanonicalWeek({
+      weekStartIso: '2026-06-08',
+      completedBeforeWeek: 3, // one week's training
+      trainingDays: 3,
+      fitnessLevel: 'beginner',
+      location: 'gym',
+      blockIndex: 0,
+      blockWeek: 2,
+    });
+    const wk3 = deriveCanonicalWeek({
+      weekStartIso: '2026-06-15',
+      completedBeforeWeek: 6,
+      trainingDays: 3,
+      fitnessLevel: 'beginner',
+      location: 'gym',
+      blockIndex: 0,
+      blockWeek: 3,
+    });
+    const names = (days: typeof wk1) =>
+      days.flatMap(d => d.exercises.map(e => e.name));
+    expect(names(wk1)).toEqual(names(wk2));
+    expect(names(wk2)).toEqual(names(wk3));
+  });
+
+  it('a reset advances blockIndex (fresh selection) — the INTENDED fresh-start behavior', () => {
+    // Regression guard for the "reset means new lifts" contract. When
+    // the gate rolls (0, wk4) → (1, wk1), the exercise selection shifts
+    // to the new block's seeded shuffle — that's the fresh-start
+    // property the spec calls out.
+    const block0 = deriveCanonicalWeek({
+      weekStartIso: '2026-06-01',
+      completedBeforeWeek: 0,
+      trainingDays: 3,
+      fitnessLevel: 'beginner',
+      location: 'gym',
+      blockIndex: 0,
+      blockWeek: 1,
+    });
+    const block1 = deriveCanonicalWeek({
+      weekStartIso: '2026-06-22',
+      completedBeforeWeek: 0,
+      trainingDays: 3,
+      fitnessLevel: 'beginner',
+      location: 'gym',
+      blockIndex: 1, // post-reset from an unearned wk4
+      blockWeek: 1,
+    });
+    const names = (days: typeof block0) =>
+      days.flatMap(d => d.exercises.map(e => e.name));
+    // Different seeded picker per blockIndex → at least ONE lift differs
+    // across blocks. (Not every lift — the primary compound anchor may
+    // repeat because it's the highest-scoring option.)
+    const b0 = names(block0);
+    const b1 = names(block1);
+    const overlap = b0.filter(n => b1.includes(n)).length;
+    expect(overlap).toBeLessThan(b0.length); // at least one shift
+  });
+});

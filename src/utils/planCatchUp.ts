@@ -23,6 +23,7 @@ import {
   type PlanDay,
   type SplitId,
 } from '../lib/planGeneration';
+import { resolveBlockPosition } from '../lib/blockPosition';
 import type { Goal } from '../lib/goalProfile';
 import { weekdaysToOffsets } from './trainingWeekdays';
 
@@ -53,12 +54,21 @@ export interface BuildCatchUpRowsArgs {
   planHistory?: { exercises: string[] }[];
   /** Block in the 4-week mesocycle (0-indexed). Same value passed to
    *  generatePlan for both catch-up and future segments — the block
-   *  itself doesn't roll during a catch-up. */
+   *  itself doesn't roll during a catch-up UNLESS blockCompletedSessions
+   *  is provided AND a rolled week crosses the earned-deload gate. */
   blockIndex: number;
   /** In-block week (1..4) at today. The catch-up segment uses this
    *  verbatim; the future segment increments by floor(N / 7) so the
    *  deload week still lands on the correct calendar week. */
   blockWeek: number;
+  /** Completed non-recovery sessions inside the CURRENT block's weeks 1–3.
+   *  When present, buildCatchUpRows funnels every future-segment week
+   *  through resolveBlockPosition so an idle-returner's resume path can't
+   *  materialize a phantom deload — a week that would calendar-roll into
+   *  wk4 with fewer than DELOAD_EARN_FLOOR sessions in the block resets to
+   *  the next block's wk1 instead. Optional so legacy callers/tests keep
+   *  their raw calendar behaviour. */
+  blockCompletedSessions?: number;
   /** Optional override for the user's normal cadence offsets. Defaults
    *  to the same spread `pickDefaultDayOffsets` produces (Mon/Wed/Fri
    *  for 3 days, etc.) UNLESS `trainingWeekdays` is supplied, in which
@@ -176,6 +186,12 @@ export function buildCatchUpRows(args: BuildCatchUpRowsArgs): CatchUpRowsResult 
   // dates as today, today+1, …. dayIndexOffset positions the rotation at
   // the user's next due type for every split kind — including bro_split
   // since v6 of the generator.
+  //
+  // Catch-up segment always uses the caller's args.blockIndex / .blockWeek
+  // verbatim. The resume path applies the earned-deload gate at those
+  // values upstream (in home.tsx via resolveBlockPosition), so a returning
+  // idle user is already at (blockIndex+1, wk1) here — no phantom deload
+  // materializes in the catch-up.
   let nextDayIndexOffset = args.mesocyclePosition + backlogN;
   let nextAnchor = addDays(args.todayIso, backlogN);
   const catchUpCalendarWeeks = Math.floor(backlogN / 7);
@@ -219,27 +235,78 @@ export function buildCatchUpRows(args: BuildCatchUpRowsArgs): CatchUpRowsResult 
   //      user resuming on a Wednesday gets sessions on the following
   //      Mon/Wed/Fri, not the default [0,2,4] from the anchor.
   //   3. pickDefaultDayOffsets(trainingDays) — legacy and 1/2/7-day users.
-  // dayIndexOffset advances by N so the rotation step continues. blockWeek
-  // advances by however many CALENDAR weeks the catch-up consumed.
+  // dayIndexOffset advances by N so the rotation step continues.
+  //
+  // Deload gating (Root cause fix): when the caller passes
+  // blockCompletedSessions we generate the future segment WEEK BY WEEK so
+  // each calendar week can be independently gated through
+  // resolveBlockPosition. A returning idle user (0 sessions in the current
+  // block) whose future segment would calendar-roll into a wk4 gets the
+  // reset — that week materializes as (nextBlockIndex, wk1) with base
+  // volume, not a phantom deload. Trained users pass through unchanged.
+  // Without the count (legacy callers), we keep the single-batch generation
+  // for byte-identical output.
   const futureOffsets =
     args.selectedDayOffsets
     ?? weekdaysToOffsets(args.trainingWeekdays ?? null, nextAnchor)
     ?? pickDefaultDayOffsets(args.trainingDays);
-  const future = generatePlan({
-    fitnessLevel: args.fitnessLevel,
-    trainingDays: args.trainingDays,
-    location: args.location,
-    split: args.split,
-    goal: args.goal,
-    planHistory: args.planHistory,
-    selectedDayOffsets: futureOffsets,
-    weeksAhead: horizonWeeks,
-    startDate: nextAnchor,
-    dayIndexOffset: nextDayIndexOffset,
-    blockIndex: args.blockIndex,
-    blockWeek: nextBlockWeek,
-  });
-  allSessions.push(...future);
+
+  if (args.blockCompletedSessions != null) {
+    // Walk one calendar week at a time so each week's blockWeek/blockIndex
+    // pass through resolveBlockPosition. rawBlockIndex is measured relative
+    // to the CURRENT block; the earned-count applies only to that current
+    // block. Any week that rolls into a NEW block gets 0 sessions (the
+    // future block hasn't been trained yet) — future wk4s in fresh blocks
+    // also reset.
+    const currentRawIndex = args.blockIndex;
+    for (let w = 0; w < horizonWeeks; w++) {
+      const weekAnchor = addDays(nextAnchor, w * 7);
+      const catchUpWeeksIn = catchUpCalendarWeeks + w;
+      // Distance in calendar weeks from block 0 wk 1 (= mesocycle anchor).
+      // The caller's blockIndex is at (blockWeek - 1) into the block, so
+      // total weeksFromAnchor = blockIndex*4 + (blockWeek - 1) + catchUpWeeksIn.
+      const weeksFromAnchor =
+        currentRawIndex * 4 + (args.blockWeek - 1) + catchUpWeeksIn;
+      const rawIndex = Math.floor(weeksFromAnchor / 4);
+      const inCurrentBlock = rawIndex === currentRawIndex;
+      const done = inCurrentBlock ? args.blockCompletedSessions : 0;
+      const pos = resolveBlockPosition({
+        weeksFromAnchor,
+        blockCompletedSessions: done,
+      });
+      const weekPlan = generatePlan({
+        fitnessLevel: args.fitnessLevel,
+        trainingDays: args.trainingDays,
+        location: args.location,
+        split: args.split,
+        goal: args.goal,
+        planHistory: args.planHistory,
+        selectedDayOffsets: futureOffsets,
+        weeksAhead: 1,
+        startDate: weekAnchor,
+        dayIndexOffset: nextDayIndexOffset + w * args.trainingDays,
+        blockIndex: pos.blockIndex,
+        blockWeek: pos.blockWeek,
+      });
+      allSessions.push(...weekPlan);
+    }
+  } else {
+    const future = generatePlan({
+      fitnessLevel: args.fitnessLevel,
+      trainingDays: args.trainingDays,
+      location: args.location,
+      split: args.split,
+      goal: args.goal,
+      planHistory: args.planHistory,
+      selectedDayOffsets: futureOffsets,
+      weeksAhead: horizonWeeks,
+      startDate: nextAnchor,
+      dayIndexOffset: nextDayIndexOffset,
+      blockIndex: args.blockIndex,
+      blockWeek: nextBlockWeek,
+    });
+    allSessions.push(...future);
+  }
 
   // ── 3. Bucket sessions into 7-day rows on a STABLE grid ──────────────
   //

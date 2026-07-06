@@ -188,6 +188,54 @@ const BLOCK_WEEK1_MUSCLE_POOL: readonly string[] = [
   `New 4-week run, easing in. Today's the lightest volume you'll see. Bring the reps, the sets stack later.`,
 ];
 
+// Deload OFFER pools (Part 5) — surfaces decideDeloadOffer's result as
+// a coach message. Two flavors: 'skip' (green streak entering a scheduled
+// deload) and 'early' (red streak, pull the deload forward). Both point
+// AT the accept button on the Training Status card; the pool copy is the
+// narration, not the button label.
+const DELOAD_OFFER_SKIP_POOL: readonly string[] = [
+  `You've been trending well and week 4's a deload — skip it if you've got the tank. Tap to keep pushing.`,
+  `Recovery's holding, lifts are climbing. Deload week's here but you can skip it — tap and keep the block honest.`,
+  `Strong stretch; the scheduled deload's due but you don't need it yet. Tap to skip it and stay in the build.`,
+  `Trend's good — you can skip this deload week and keep loading. One tap and you're through.`,
+];
+
+const DELOAD_OFFER_EARLY_POOL: readonly string[] = [
+  `Trend's slipping — the deload can come now, not week 4. Tap to pull it forward and reset.`,
+  `You've been running hot for a while. Let the deload land early — tap to move it to this week and recover.`,
+  `Recovery signals are down. Take the deload now instead of grinding through — tap to pull it forward.`,
+  `The body's telling you to back off. Pull the deload forward — tap to reset this week and come back fresh.`,
+];
+
+// Deload HEADS-UP pool (Part 5) — "next week is a deload" narration. Fires
+// when a scheduled deload is ~4–10 days out. No action; it's a preparation
+// note so the user knows the reset is coming and can plan their week.
+const DELOAD_HEADS_UP_POOL: readonly ((days: number) => string)[] = [
+  (days) => `Next week is a deload — back off and recover. About ${days} days out. Empty the tank this week; the reset earns it.`,
+  (days) => `Deload lands in ${days} days. Push through the rest of this week; the back-off is around the corner.`,
+  (days) => `Recovery week's about ${days} days out. Bring it hard until then — the light week comes next.`,
+  (days) => `Heads up: deload in ${days} days. This week's the last hard push before the reset. Make it count.`,
+];
+
+// "Time to add weight" nudge — the mirror on the coach side of
+// applyStallNudge's engine-side load bump. Fires when today's energy is
+// high AND the named lift has been parked at the same top weight for
+// N weeks (mirrors STALL_WEEKS in loadPrescription). The line names the
+// lift and the exact weeks-on-hold count so the user hears the specific
+// call, not generic encouragement. Directive is a verb pair
+// ("push" / "add a little") so the hero contract's forward-cue guard is
+// always satisfied even after AI rephrase.
+const PROGRESS_READY_POOL: readonly ((lift: string, weight: number, weeks: number) => string)[] = [
+  (lift, _w, weeks) => `Energy's high and ${lift} has sat at the same weight for ${weeks} weeks — time to push. Add a little.`,
+  (lift, _w, weeks) => `${lift} hasn't moved in ${weeks} weeks and today you've got the tank. Add a little; make the number climb.`,
+  (lift, _w, weeks) => `${weeks} weeks parked on ${lift}, energy's there today — push it. A small bump is exactly right.`,
+  (lift, _w, weeks) => `Green-light day. ${lift} at the same weight for ${weeks} weeks — nudge it up. You've got the room.`,
+  (lift, _w, weeks) => `Today's the day to push ${lift}. ${weeks} weeks at the same load and the energy's high — add a little.`,
+  (lift, _w, weeks) => `${lift} has been sitting for ${weeks} weeks. High-energy day like today is when the number moves. Add a little.`,
+  (lift, weight, weeks) => `${lift} parked at ${weight} kg for ${weeks} weeks. Energy's high — bump it a plate today. That's the whole game.`,
+  (lift, _w, weeks) => `Time to push ${lift} — ${weeks} weeks on the same weight, and the energy today says do it. Add a little.`,
+];
+
 // Muscle lane, wk2 — "build" week. Volume is CLIMBING from wk1; the user
 // should feel more sets today than last week. This is where the stimulus
 // starts landing.
@@ -575,6 +623,15 @@ export function phraseObservation(obs: CoachObservation): string {
     }
     case 'calibration':
       return pick(CALIBRATION_POOL, obs.factSig);
+    case 'progress_ready':
+      return pick(PROGRESS_READY_POOL, obs.factSig)(obs.lift, obs.weight, obs.weeks);
+    case 'deload_offer':
+      return pick(
+        obs.action === 'skip' ? DELOAD_OFFER_SKIP_POOL : DELOAD_OFFER_EARLY_POOL,
+        obs.factSig,
+      );
+    case 'deload_heads_up':
+      return pick(DELOAD_HEADS_UP_POOL, obs.factSig)(obs.deloadInDays);
   }
 }
 

@@ -214,6 +214,57 @@ export type CalibrationObservation = BaseObs & {
   type: 'calibration';
 };
 
+/** Deload offer — surfaces the decideDeloadOffer result as a coach message
+ *  so the user sees the call in the coach card (in addition to the accept
+ *  button on the Training Status card). Fires only when decideDeloadOffer
+ *  returned a non-null action AND all its guards passed (recent training
+ *  floor, state not 'unknown', block-week gate). The `action` field is
+ *  echoed onto the observation so the dashboard can render the correct
+ *  accept button next to the message. */
+export type DeloadOfferObservation = BaseObs & {
+  type: 'deload_offer';
+  /** 'early' → pull the deload forward from a red streak; 'skip' → skip a
+   *  scheduled deload while trending green. */
+  action: 'early' | 'skip';
+};
+
+/** Deload heads-up — "next week is a deload" narration. Fires when a
+ *  SCHEDULED deload is imminent (≈ 4–10 days out) AND the user isn't
+ *  already in a deload week. Never used as a call-to-action — it's a
+ *  narration message so the user knows the reset is coming. Distinct
+ *  factSig per (week-out) so the message advances as the deload gets
+ *  closer instead of re-speaking the same day-count. */
+export type DeloadHeadsUpObservation = BaseObs & {
+  type: 'deload_heads_up';
+  /** Days between today and the deload's start. Rounded via the caller;
+   *  the phraser uses this only for the factSig differentiator. */
+  deloadInDays: number;
+};
+
+/** "Time to add weight" nudge — the mirror on the coach side of
+ *  applyStallNudge's engine-side load bump. Fires when:
+ *    (1) TODAY'S energy_score is 4 or 5 (high),
+ *    (2) the lift has been PARKED at the same top weight for ≥ 2 weeks
+ *        AND was actually trained in that window (≥ 2 sessions at that top),
+ *    (3) the most recent set was NOT a true failure (lastRir !== 0) —
+ *        never tell someone to add weight right after a grind.
+ *  Detection reads the SAME liftSessions + lastRir + today energy the engine
+ *  reads (see buildProgressReady), so the coach and the load nudge cannot
+ *  contradict each other by construction.
+ *
+ *  One nudge per focus: buildProgressReady picks the ONE lift parked longest
+ *  (ties broken by lift name for determinism); the phraser calls it out by
+ *  name. */
+export type ProgressReadyObservation = BaseObs & {
+  type: 'progress_ready';
+  /** Named lift to push. */
+  lift: string;
+  /** Current top weight in kg (what the lift is parked at). */
+  weight: number;
+  /** How many weeks it's been parked at that weight. */
+  weeks: number;
+};
+
 export type Observation =
   | LiftProgressionObservation
   | SessionPrObservation
@@ -225,7 +276,10 @@ export type Observation =
   | BriefingFallbackObservation
   | RestDayObservation
   | PlanRationaleObservation
-  | CalibrationObservation;
+  | CalibrationObservation
+  | ProgressReadyObservation
+  | DeloadOfferObservation
+  | DeloadHeadsUpObservation;
 
 // ── Composite (synthesis) observations ─────────────────────────────────
 //
@@ -356,6 +410,34 @@ export interface ObservationsInput {
    *  never trigger a composite. */
   lowEnergySessions?: number;
   rirMissSets?: number;
+  /** TODAY's pre-workout energy score (1..5). REQUIRED for the
+   *  progress_ready ("time to add weight") nudge, which fires only when
+   *  today's energy is 4 or 5. Optional so pre-existing callers that don't
+   *  wire it never accidentally trigger the nudge — they just miss it. */
+  todayEnergyScore?: number | null;
+  /** Per-lift most recent RIR (0..5), or null if unknown. Read only by the
+   *  progress_ready nudge to skip any lift whose last set was a true failure
+   *  (RIR 0) — never tell someone to add weight right after a grind. */
+  lastRirByLift?: Record<string, number | null>;
+  /** Optional set of "primary compound" lift names (bench/squat/deadlift and
+   *  variants) that the progress_ready nudge prefers when picking the ONE
+   *  lift to call out. Falls back to "parked longest" tie-break when unset,
+   *  which is fine — the tie-break is deterministic. */
+  primaryCompoundLifts?: ReadonlySet<string>;
+  /** Non-null action from decideDeloadOffer when the deload-offer coach
+   *  message should surface (Part 5). The caller is authoritative — the
+   *  observation builder just narrates the action the training-status
+   *  logic already decided on. */
+  deloadOfferAction?: 'early' | 'skip' | null;
+  /** Days between today and the next scheduled deload. When set to a value
+   *  in the "next week is deload" window (see DELOAD_HEADS_UP_MIN/MAX
+   *  below), a heads-up coach message fires. null / undefined disables
+   *  the heads-up. */
+  deloadInDays?: number | null;
+  /** Whether the ACTIVE week's row is already a deload — used to suppress
+   *  the heads-up when we're already in the deload. Optional (falsy is
+   *  treated as "not in deload"). */
+  activeIsDeload?: boolean;
 }
 
 // ── Pure helpers ───────────────────────────────────────────────────────
@@ -958,6 +1040,210 @@ export function buildRestDay(
   };
 }
 
+// ── deload_offer / deload_heads_up (Part 5) ──────────────────────────────
+//
+// Both surface the deload cadence in the coach message stream (in addition
+// to the accept button on the Training Status card). The builders are
+// deliberately thin — the DECISION lives upstream in decideDeloadOffer
+// (which now has its own training-floor gate) so the observation is just
+// the narration + persistence hook.
+
+/** Emit the deload-offer coach message when decideDeloadOffer returned
+ *  non-null. The dashboard renders the accept button next to the message
+ *  and calls the same applyDeloadToRows / clearDeloadFromRows plumbing
+ *  the Training Status card uses. Idempotent via the factSig (one message
+ *  per (action, today) — a fresh day re-speaks; the same day dedupes). */
+export function buildDeloadOffer(
+  action: 'early' | 'skip' | null | undefined,
+  todayIso: string,
+): DeloadOfferObservation | null {
+  if (action !== 'early' && action !== 'skip') return null;
+  return {
+    type: 'deload_offer',
+    id: `deload_offer:${action}`,
+    // factSig re-fires day-by-day so the message doesn't stay silent for a
+    // week if the user ignored it — the offer is time-bounded to the
+    // current week regardless.
+    factSig: `deload_offer-${action}-${todayIso}`,
+    // Salience sits BELOW the protective reads (grinding 0.96,
+    // block_position:4 0.95) — a deload OFFER is a call to action, not the
+    // recovery framing itself. Above the ordinary green-light reads
+    // (progress_ready 0.88 / back_on_track 0.88) so on a wk4 deload day
+    // the OFFER leads rather than an unrelated coach line.
+    salience: 0.92,
+    eventDate: todayIso,
+    action,
+  };
+}
+
+/** Heads-up window (in days) for the "next week is a deload" message. The
+ *  message fires when the deload is roughly 4–10 days out — a natural
+ *  "next week" horizon — and only when the active week isn't ALREADY a
+ *  deload (nothing to warn about at that point). */
+const DELOAD_HEADS_UP_MIN_DAYS = 4;
+const DELOAD_HEADS_UP_MAX_DAYS = 10;
+
+export function buildDeloadHeadsUp(
+  deloadInDays: number | null | undefined,
+  activeIsDeload: boolean,
+  todayIso: string,
+): DeloadHeadsUpObservation | null {
+  if (activeIsDeload) return null;
+  const d = typeof deloadInDays === 'number' && Number.isFinite(deloadInDays)
+    ? Math.floor(deloadInDays)
+    : null;
+  if (d == null || d < DELOAD_HEADS_UP_MIN_DAYS || d > DELOAD_HEADS_UP_MAX_DAYS) return null;
+  return {
+    type: 'deload_heads_up',
+    id: 'deload_heads_up',
+    // factSig carries the day-count so the message advances as the
+    // deload approaches (10-days-out re-speaks distinctly from 6-days-out).
+    factSig: `deload_heads_up-${d}d`,
+    // Lower than deload_offer (0.92) — this is narration, not a directive.
+    // Above block_position wk3 (0.7) which is also a mesocycle-framing
+    // read but less specific.
+    salience: 0.78,
+    eventDate: todayIso,
+    deloadInDays: d,
+  };
+}
+
+// ── progress_ready — "time to add weight" nudge ──────────────────────────
+//
+// Same detection logic as applyStallNudge, deliberately. The engine bumps
+// the LOAD (workout screen shows a higher weight); this observation bumps
+// the COACH (the message tells the user to push). They agree by construction.
+//
+// Trigger (from the product spec — read carefully):
+//   1. TODAY'S energy_score is 4 or 5 (high). Nothing about PAST weeks'
+//      energy matters — this is a same-day green light.
+//   2. The lift's top working weight has NOT increased for ≥ 2 weeks AND
+//      the user actually trained that lift in the window (≥ 2 sessions at
+//      that same top — an absent lift never counts as "stalled").
+//   3. SAFETY GUARD: skip any lift whose last set was a true failure
+//      (RIR 0). Never tell someone to add weight right after a grind.
+//
+// One nudge per focus: pick the ONE lift parked longest, preferring a lift
+// on the primaryCompoundLifts set when supplied. Ties broken by lift name
+// so identical inputs produce identical picks (determinism).
+
+/** Match applyStallNudge's stall math: from an oldest-first session list at
+ *  the CURRENT top, walk backward while sessions are at the same weight and
+ *  return the run length + earliest-in-run date. Any prior session at a
+ *  different weight ends the run. Returns null when there are fewer than 2
+ *  sessions in the run (a single session at the current top is not a stall). */
+function stallRunAtTop(
+  sessionsOldestFirst: LiftSessionTop[],
+): { runLength: number; earliestDate: string; topKg: number } | null {
+  if (!sessionsOldestFirst || sessionsOldestFirst.length < 2) return null;
+  const sorted = [...sessionsOldestFirst].sort((a, b) => a.date.localeCompare(b.date));
+  const latest = sorted[sorted.length - 1];
+  const currentTop = latest.topKg;
+  let earliestDate = latest.date;
+  let runLength = 1;
+  for (let i = sorted.length - 2; i >= 0; i--) {
+    if (sorted[i].topKg === currentTop) {
+      earliestDate = sorted[i].date;
+      runLength++;
+    } else {
+      break;
+    }
+  }
+  if (runLength < 2) return null;
+  return { runLength, earliestDate, topKg: currentTop };
+}
+
+/** Minimum weeks of parked-at-same-weight before the coach nudges. Aligned
+ *  with STALL_WEEKS in loadPrescription so the coach's copy and the
+ *  engine's load bump agree — the coach says "push" the same session the
+ *  load bumps up. */
+const PROGRESS_READY_MIN_WEEKS = 2;
+
+/** Build the "time to add weight" observation. Iterates every lift in
+ *  liftSessions, keeps the ones that meet all three trigger conditions,
+ *  and returns the single strongest candidate — parked longest (weeks
+ *  descending), primary compound preferred, lift name for the tie-break.
+ *  Returns null when nothing qualifies, or when today's energy isn't ≥ 4. */
+export function buildProgressReady(
+  liftSessions: Record<string, LiftSessionTop[]>,
+  todayEnergyScore: number | null | undefined,
+  lastRirByLift: Record<string, number | null> | undefined,
+  todayIso: string,
+  primaryCompoundLifts?: ReadonlySet<string>,
+): ProgressReadyObservation | null {
+  // Trigger (1): today's energy must be high. Any other value silences the
+  // whole nudge — this is the "same-day green light" the product asked for.
+  const energy = typeof todayEnergyScore === 'number' ? Math.floor(todayEnergyScore) : null;
+  if (energy == null || energy < 4) return null;
+  if (!liftSessions || Object.keys(liftSessions).length === 0) return null;
+
+  interface Candidate {
+    lift: string;
+    weight: number;
+    weeks: number;
+    isPrimaryCompound: boolean;
+  }
+  const candidates: Candidate[] = [];
+
+  for (const lift of Object.keys(liftSessions)) {
+    // Trigger (3) safety guard: skip on true failure. RIR 0 = grind; RIR
+    // null (unknown) is silent-safe — we don't nudge without a signal.
+    const lastRir = lastRirByLift?.[lift];
+    if (lastRir === 0) continue;
+
+    const run = stallRunAtTop(liftSessions[lift]);
+    if (!run) continue;
+
+    // Trigger (2): parked ≥ N weeks from earliest run session to today. Use
+    // today as the anchor (mirrors applyStallNudge — a lifter who holds
+    // 80 kg, takes a week off, and comes back to 80 kg still gets credit for
+    // those flat weeks). floor(days/7) matches the engine exactly.
+    const days = daysBetween(run.earliestDate, todayIso);
+    const weeks = Math.floor(days / 7);
+    if (weeks < PROGRESS_READY_MIN_WEEKS) continue;
+
+    candidates.push({
+      lift,
+      weight: run.topKg,
+      weeks,
+      isPrimaryCompound: !!primaryCompoundLifts?.has(lift),
+    });
+  }
+
+  if (candidates.length === 0) return null;
+
+  // Pick the ONE lift to call out (don't spam every stalled lift). Preference
+  // order: primary compound first, then parked-longest, then lift name for
+  // determinism. Any two identical inputs return the same choice.
+  candidates.sort((a, b) => {
+    if (a.isPrimaryCompound !== b.isPrimaryCompound) {
+      return a.isPrimaryCompound ? -1 : 1;
+    }
+    if (a.weeks !== b.weeks) return b.weeks - a.weeks;
+    return a.lift < b.lift ? -1 : a.lift > b.lift ? 1 : 0;
+  });
+  const pick = candidates[0];
+
+  return {
+    type: 'progress_ready',
+    id: `progress_ready:${pick.lift}`,
+    // factSig encodes weight + weeks so the line advances (and re-speaks)
+    // when the parked weight or the run length changes — no permanent
+    // dedup of a stale "still 80 kg for 2 weeks" line while today is
+    // "still 80 kg for 3 weeks."
+    factSig: `progress_ready-${pick.lift}-${fmtFactKg(pick.weight)}-${pick.weeks}w`,
+    // Higher than PR (0.62) — this is directive/read (do X today), not
+    // description. Below the strongest protective reads (grinding 0.96,
+    // block_position:4 0.95) and the green-light composite pushing_hard
+    // (0.9); it's a "you've got room today" call, not an urgent one.
+    salience: 0.88,
+    eventDate: todayIso,
+    lift: pick.lift,
+    weight: pick.weight,
+    weeks: pick.weeks,
+  };
+}
+
 // ── Composite (synthesis) builders ─────────────────────────────────────
 // Each is pure and fires ONLY on its co-occurrence condition. They read the
 // already-built lift observations plus the fatigue counts, so the synthesis
@@ -1122,6 +1408,36 @@ export function deriveObservations(input: ObservationsInput): CoachObservation[]
     { goal: input.goal ?? null, priority: input.priority ?? null },
   );
   if (rationale) out.push(rationale);
+
+  // Progress-ready — "time to add weight" nudge. Reads today's energy +
+  // lift history + last RIR; silent when any trigger isn't met (see
+  // buildProgressReady comments). One lift per focus.
+  const progressReady = buildProgressReady(
+    input.liftSessions,
+    input.todayEnergyScore ?? null,
+    input.lastRirByLift,
+    input.todayIso,
+    input.primaryCompoundLifts,
+  );
+  if (progressReady) out.push(progressReady);
+
+  // Deload offer — surfaces the decideDeloadOffer result (already gated
+  // upstream in home.tsx by the recent-training floor) as a coach message
+  // so the user sees the offer in the coach card as well as on the
+  // Training Status card. Silent when the caller didn't wire an action
+  // (deloadOfferAction absent or null).
+  const deloadOffer = buildDeloadOffer(input.deloadOfferAction ?? null, input.todayIso);
+  if (deloadOffer) out.push(deloadOffer);
+
+  // Deload heads-up — "next week is a deload" narration. Fires only when
+  // a scheduled deload is ~4–10 days out AND we're not already in a
+  // deload week. Silent otherwise.
+  const deloadHeadsUp = buildDeloadHeadsUp(
+    input.deloadInDays ?? null,
+    input.activeIsDeload ?? false,
+    input.todayIso,
+  );
+  if (deloadHeadsUp) out.push(deloadHeadsUp);
 
   const calibration = buildCalibration(
     input.firstSessionDaysAgo,

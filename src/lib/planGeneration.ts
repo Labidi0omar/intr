@@ -81,8 +81,22 @@ import {
  *       ordering) is fixed within a block, so the seeded picker still
  *       returns identical EXERCISES for weeks 1–3. Also stamps
  *       PlanDay.blockWeek for the coach to speak to the ramp phase.
+ *   9 — earned-deload gate: calendar week-4 no longer auto-materializes as
+ *       a deload. Every plan-writing path (planSync main loop, self-heal
+ *       canonical derivation, resume/catch-up pack) now funnels its
+ *       (blockIndex, blockWeek) computation through
+ *       src/lib/blockPosition.ts::resolveBlockPosition, which reads
+ *       completed non-recovery sessions in the current block's weeks 1–3.
+ *       Below DELOAD_EARN_FLOOR (3) the calendar wk4 resets to
+ *       (blockIndex+1, 1) — a fresh block with base volume, not a phantom
+ *       recovery week the user never trained into. Trained blocks pass
+ *       through unchanged so real deloads still land. Existing rows
+ *       written by v8 that materialized an unearned deload regenerate to
+ *       the corrected non-deload week on next open (future rows fail the
+ *       version-based satisfaction check; the active row fails the
+ *       self-heal derivation because the canonical shape now differs).
  */
-export const CURRENT_PLAN_VERSION = 8;
+export const CURRENT_PLAN_VERSION = 9;
 
 export type FitnessLevel = 'beginner' | 'intermediate' | 'advanced';
 export type Location = 'gym' | 'home';

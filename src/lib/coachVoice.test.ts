@@ -173,7 +173,48 @@ function calibration(): Observation {
   };
 }
 
+function progressReady(lift: string, weight: number, weeks: number): Observation {
+  return {
+    type: 'progress_ready',
+    id: `progress_ready:${lift}`,
+    factSig: `progress_ready-${lift}-${weight}-${weeks}w`,
+    salience: 0.88,
+    eventDate: TODAY,
+    lift,
+    weight,
+    weeks,
+  };
+}
+
+function deloadOfferObs(action: 'early' | 'skip'): Observation {
+  return {
+    type: 'deload_offer',
+    id: `deload_offer:${action}`,
+    factSig: `deload_offer-${action}-${TODAY}`,
+    salience: 0.92,
+    eventDate: TODAY,
+    action,
+  };
+}
+
+function deloadHeadsUpObs(days: number): Observation {
+  return {
+    type: 'deload_heads_up',
+    id: 'deload_heads_up',
+    factSig: `deload_heads_up-${days}d`,
+    salience: 0.78,
+    eventDate: TODAY,
+    deloadInDays: days,
+  };
+}
+
 const ALL_FIXTURES: CoachObservation[] = [
+  deloadOfferObs('skip'),
+  deloadOfferObs('early'),
+  deloadHeadsUpObs(5),
+  deloadHeadsUpObs(10),
+  progressReady('Bench', 80, 2),
+  progressReady('Squat', 100, 3),
   up('Bench', 80, 85),
   up('Bench', 82.5, 87.5),
   upHigh('Bench', 80, 90),
@@ -686,6 +727,65 @@ describe('phraseObservation', () => {
     expect(joined).toMatch(/ramp|climb|stack|volume|light|intro|grow|low/);
     // Under 130 chars per line (hero contract).
     for (const line of lines) expect(line.length).toBeLessThanOrEqual(130);
+  });
+
+  it('deload_offer phrasing ALWAYS carries the accept-tap cue (dashboard button prompt)', () => {
+    // The observation surfaces on the dashboard next to an accept button
+    // that calls applyDeloadToRows / clearDeloadFromRows. If the line
+    // drops the "tap" cue, the user sees a coach message without knowing
+    // there's an action to take on it.
+    for (const action of ['skip', 'early'] as const) {
+      const lines: string[] = [];
+      for (let i = 0; i < 8; i++) {
+        lines.push(phraseObservation({
+          type: 'deload_offer', id: `deload_offer:${action}`,
+          factSig: `deload_offer-${action}-2026-06-${10 + i}`,
+          salience: 0.92, eventDate: TODAY, action,
+        }));
+      }
+      // Every entry in the rotation carries "tap" — the accept-button
+      // prompt for the dashboard action.
+      for (const line of lines) expect(line.toLowerCase()).toContain('tap');
+    }
+  });
+
+  it('deload_heads_up phrasing NEVER carries "tap" (narration, not an action)', () => {
+    // Mirror of the above: the heads-up is preparation narration and
+    // must not misread as a call to action (there's no button on it).
+    const lines: string[] = [];
+    for (let i = 4; i <= 10; i++) {
+      lines.push(phraseObservation({
+        type: 'deload_heads_up', id: 'deload_heads_up',
+        factSig: `deload_heads_up-${i}d`,
+        salience: 0.78, eventDate: TODAY, deloadInDays: i,
+      }));
+    }
+    for (const line of lines) expect(line.toLowerCase()).not.toContain('tap');
+  });
+
+  it('progress_ready phrasing tells the user to push (never contradicts the engine bump)', () => {
+    // The engine bumps the load on the workout card in the same session
+    // this observation fires. If the coach says "hold" or "back off", the
+    // two contradict each other and the user's trust in the whole system
+    // drops. Every entry in the pool has to point AT the load bump.
+    const lines: string[] = [];
+    for (let i = 0; i < 10; i++) {
+      lines.push(phraseObservation({
+        type: 'progress_ready', id: 'progress_ready:Bench',
+        factSig: `progress_ready-Bench-80-${2 + i}w`, salience: 0.88, eventDate: TODAY,
+        lift: 'Bench', weight: 80, weeks: 2 + i,
+      }));
+    }
+    const joined = lines.join('\n').toLowerCase();
+    // Every rotation entry carries a "add/push/nudge/bump/climb" cue —
+    // the load-progression directive the observation is FOR.
+    expect(joined).toMatch(/add a little|push|nudge|bump|climb/);
+    // No line pushes the opposite (a hold or backoff would contradict the
+    // engine's bump).
+    for (const line of lines) {
+      expect(line.toLowerCase()).not.toContain('hold the load');
+      expect(line.toLowerCase()).not.toContain('back off');
+    }
   });
 
   it('muscle-lane block_position wk2 speaks to the BUILD (more sets, hold loads)', () => {

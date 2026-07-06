@@ -231,6 +231,40 @@ describe('applyStallNudge', () => {
     expect(out.stallWeeks).toBeGreaterThanOrEqual(STALL_WEEKS);
   });
 
+  it('OVERLOAD CLIMB TEST — flat 2 weeks of clean RIR-1/2, energy 4 → weight climbs', () => {
+    // The user-explicit guardrail for the STALL_WEEKS 3 → 2 drop. The
+    // scenario mirrors the "coach nudges to add weight" trigger exactly:
+    //   • lift parked at 80 kg for 2 weeks (two sessions at the same top)
+    //   • last set clean (RIR 2 — one in the tank)
+    //   • today energy 4 (high)
+    // Under the old STALL_WEEKS=3 this returned baseHold (silent stall).
+    // Under the new threshold it must produce a real bump — that's the
+    // whole point of the change, and it's what makes the coach's
+    // "time to push" copy land against a moving number instead of a stuck
+    // one. If this fixture ever regresses, the load engine is dropping the
+    // ball on progressive overload.
+    const today = '2026-06-30';
+    const parkedTwoWeeks = [
+      { topKg: 80, date: shiftIso(today, -14) }, // 2 weeks ago
+      { topKg: 80, date: today },                 // today, same weight
+    ];
+    const out = applyStallNudge({
+      base: baseHold,
+      liftHistory: parkedTwoWeeks,
+      lastRir: 2,
+      energyScore: 4,
+      isCompound: true,
+      todayIso: today,
+    });
+    expect(out.rationale).toBe('progress');
+    expect(out.cause).toBe('time_to_progress');
+    // Real climb — the number must actually move (this is what the coach's
+    // "add a little" copy is telling the user to do).
+    expect(out.suggestedWeightKg).toBeGreaterThan(80);
+    expect(out.suggestedWeightKg).toBe(85); // +5% compound step, plate-rounded
+    expect(out.stallWeeks).toBeGreaterThanOrEqual(STALL_WEEKS);
+  });
+
   it('flat ≥ 3 weeks + high energy (4) → still bumps (only low energy protects)', () => {
     const today = '2026-06-30';
     const out = applyStallNudge({
@@ -277,13 +311,16 @@ describe('applyStallNudge', () => {
     expect(out).toBe(failureRx);
   });
 
-  it('flat but only 2 weeks → no bump (under STALL_WEEKS threshold)', () => {
+  it('flat only 1 week (7 days) → no bump (under STALL_WEEKS = 2)', () => {
+    // STALL_WEEKS dropped from 3 to 2 in the overload PR. A 2-week parked
+    // window now EARNS the nudge (see the "climbs cleanly" test below); the
+    // under-threshold case moved to a 1-week window.
     const today = '2026-06-30';
     const out = applyStallNudge({
       base: baseHold,
       liftHistory: [
-        { topKg: 80, date: shiftIso(today, -14) },
         { topKg: 80, date: shiftIso(today, -7) },
+        { topKg: 80, date: today },
       ],
       lastRir: 1,
       energyScore: 3,
@@ -309,16 +346,15 @@ describe('applyStallNudge', () => {
   });
 
   it('long-ago session at the same weight with an intervening higher session → no bump', () => {
-    // History: 80 → 85 → 80 → 80 → 80. The latest run is 3×80, but the
-    // 85 in the middle broke the stall; only the post-85 sessions count.
-    // Earliest session in the run is 14 days ago → 2 weeks → under threshold.
+    // History: 80 → 85 → 80 → 80. The latest run is 2×80, but the 85 in the
+    // middle broke the stall; only the post-85 sessions count. Earliest in
+    // the run is 7 days ago → 1 week → under threshold (STALL_WEEKS = 2).
     const today = '2026-06-30';
     const out = applyStallNudge({
       base: baseHold,
       liftHistory: [
         { topKg: 80, date: shiftIso(today, -35) },
         { topKg: 85, date: shiftIso(today, -28) }, // breaks the stall
-        { topKg: 80, date: shiftIso(today, -14) },
         { topKg: 80, date: shiftIso(today, -7) },
         { topKg: 80, date: today },
       ],

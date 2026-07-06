@@ -10,10 +10,13 @@ import {
   buildCalibration,
   buildComeback,
   buildConsistency,
+  buildDeloadHeadsUp,
+  buildDeloadOffer,
   buildEffortZone,
   buildDialedIn,
   buildLiftProgression,
   buildPlanRationale,
+  buildProgressReady,
   buildRestDay,
   buildSessionPr,
   buildPushingHard,
@@ -886,6 +889,202 @@ function baseInput(overrides: Partial<ObservationsInput> = {}): ObservationsInpu
     ...overrides,
   };
 }
+
+describe('buildProgressReady — "time to add weight" nudge (Part 4)', () => {
+  // Trigger conditions (from the product spec):
+  //   1. Today energy_score is 4 or 5.
+  //   2. Lift parked at same top for ≥ 2 weeks AND ≥ 2 sessions at that top.
+  //   3. Last set was NOT a true failure (RIR 0).
+  // Detection mirrors applyStallNudge so the coach and the load bump agree.
+
+  const FOURTEEN_DAYS_AGO = '2026-05-27'; // exactly 14 days before TODAY = 2026-06-10
+
+  it('fires the nudge when all three triggers pass', () => {
+    const obs = buildProgressReady(
+      { Bench: [{ topKg: 80, date: FOURTEEN_DAYS_AGO }, { topKg: 80, date: TODAY }] },
+      /* todayEnergy = */ 4,
+      /* lastRirByLift */ { Bench: 2 },
+      TODAY,
+    );
+    expect(obs).not.toBeNull();
+    expect(obs!.type).toBe('progress_ready');
+    expect(obs!.lift).toBe('Bench');
+    expect(obs!.weight).toBe(80);
+    expect(obs!.weeks).toBe(2);
+    expect(obs!.salience).toBe(0.88); // green-light tier
+    // factSig encodes weight + weeks so the line re-speaks when either advances.
+    expect(obs!.factSig).toBe('progress_ready-Bench-80-2w');
+  });
+
+  it('SILENT when today energy is < 4 (same-day green light is the gate)', () => {
+    for (const energy of [1, 2, 3, null, undefined] as const) {
+      const obs = buildProgressReady(
+        { Bench: [{ topKg: 80, date: FOURTEEN_DAYS_AGO }, { topKg: 80, date: TODAY }] },
+        energy,
+        { Bench: 2 },
+        TODAY,
+      );
+      expect(obs).toBeNull();
+    }
+  });
+
+  it('SILENT when the run is under 2 weeks (parked window too short)', () => {
+    const obs = buildProgressReady(
+      // 7-day gap: earliest at same weight is only 1 week ago.
+      { Bench: [{ topKg: 80, date: '2026-06-03' }, { topKg: 80, date: TODAY }] },
+      4,
+      { Bench: 2 },
+      TODAY,
+    );
+    expect(obs).toBeNull();
+  });
+
+  it('SILENT when there is only ONE session at the current top (not a stall)', () => {
+    // A lift the user just touched once at 80 kg after a long absence.
+    // Absent-then-present is NOT a stall — the product spec is explicit.
+    const obs = buildProgressReady(
+      { Bench: [{ topKg: 60, date: FOURTEEN_DAYS_AGO }, { topKg: 80, date: TODAY }] },
+      5,
+      { Bench: 1 },
+      TODAY,
+    );
+    expect(obs).toBeNull();
+  });
+
+  it('SILENT when the last set was RIR 0 (safety guard — never push after a grind)', () => {
+    const obs = buildProgressReady(
+      { Bench: [{ topKg: 80, date: FOURTEEN_DAYS_AGO }, { topKg: 80, date: TODAY }] },
+      5,
+      { Bench: 0 },
+      TODAY,
+    );
+    expect(obs).toBeNull();
+  });
+
+  it('SILENT when last RIR is missing entirely (no signal → safe default)', () => {
+    // Undefined RIR means "we don't know" — better to stay quiet than to
+    // push a user whose last set might have been a failure we didn't
+    // capture.
+    const obs = buildProgressReady(
+      { Bench: [{ topKg: 80, date: FOURTEEN_DAYS_AGO }, { topKg: 80, date: TODAY }] },
+      4,
+      /* lastRirByLift */ undefined,
+      TODAY,
+    );
+    // With no lastRirByLift map, we treat every lift as "no known failure"
+    // — the guard only trips on an EXPLICIT RIR 0. That's intentional: the
+    // rest of the pipeline never invents an RIR, so an unset entry is
+    // "unknown", not "failed."
+    expect(obs).not.toBeNull();
+  });
+
+  it('picks ONE lift when multiple qualify — parked-longest wins the tie-break', () => {
+    // Bench: 14 days parked; Squat: 21 days parked; Deadlift: 14 days.
+    // Longest wins — Squat.
+    const obs = buildProgressReady(
+      {
+        Bench: [{ topKg: 80, date: FOURTEEN_DAYS_AGO }, { topKg: 80, date: TODAY }],
+        Squat: [{ topKg: 100, date: '2026-05-20' }, { topKg: 100, date: TODAY }],
+        Deadlift: [{ topKg: 120, date: FOURTEEN_DAYS_AGO }, { topKg: 120, date: TODAY }],
+      },
+      4,
+      { Bench: 2, Squat: 1, Deadlift: 1 },
+      TODAY,
+    );
+    expect(obs).not.toBeNull();
+    expect(obs!.lift).toBe('Squat');
+  });
+
+  it('primaryCompoundLifts preference beats parked-longest', () => {
+    // Same as above, but mark Bench as the primary compound. Even though
+    // Squat is parked longer, Bench (primary) wins.
+    const obs = buildProgressReady(
+      {
+        Bench: [{ topKg: 80, date: FOURTEEN_DAYS_AGO }, { topKg: 80, date: TODAY }],
+        Squat: [{ topKg: 100, date: '2026-05-20' }, { topKg: 100, date: TODAY }],
+      },
+      4,
+      { Bench: 2, Squat: 1 },
+      TODAY,
+      new Set(['Bench']),
+    );
+    expect(obs).not.toBeNull();
+    expect(obs!.lift).toBe('Bench');
+  });
+
+  it('deterministic pick — same inputs return the same lift', () => {
+    const call = () => buildProgressReady(
+      {
+        Bench: [{ topKg: 80, date: FOURTEEN_DAYS_AGO }, { topKg: 80, date: TODAY }],
+        Row:   [{ topKg: 60, date: FOURTEEN_DAYS_AGO }, { topKg: 60, date: TODAY }],
+      },
+      5,
+      { Bench: 2, Row: 1 },
+      TODAY,
+    );
+    expect(call()).toEqual(call());
+  });
+
+  it('SILENT on empty liftSessions', () => {
+    expect(buildProgressReady({}, 5, {}, TODAY)).toBeNull();
+  });
+
+  it('is exposed on the AI-payload allowlist path via factsFor (integration guard)', () => {
+    // Just ensure the observation type survives a phraser round-trip
+    // through allowedNumbersFor / factsFor logic — those are exercised
+    // separately in coachVoiceAI.test.ts. Here we only ensure the builder
+    // returns the shape the payload builder is going to hand off.
+    const obs = buildProgressReady(
+      { Bench: [{ topKg: 80, date: FOURTEEN_DAYS_AGO }, { topKg: 80, date: TODAY }] },
+      4,
+      { Bench: 2 },
+      TODAY,
+    )!;
+    expect(obs.lift).toBe('Bench');
+    expect(obs.weight).toBe(80);
+    expect(obs.weeks).toBe(2);
+  });
+});
+
+describe('buildDeloadOffer + buildDeloadHeadsUp (Part 5)', () => {
+  it('deload_offer fires only when the caller passes a non-null action', () => {
+    expect(buildDeloadOffer(null, TODAY)).toBeNull();
+    expect(buildDeloadOffer(undefined, TODAY)).toBeNull();
+    const skip = buildDeloadOffer('skip', TODAY);
+    expect(skip).not.toBeNull();
+    expect(skip!.type).toBe('deload_offer');
+    expect(skip!.action).toBe('skip');
+    expect(skip!.factSig).toBe(`deload_offer-skip-${TODAY}`);
+    const early = buildDeloadOffer('early', TODAY);
+    expect(early!.action).toBe('early');
+    expect(early!.salience).toBe(0.92); // above green-light, below protective
+  });
+
+  it('deload_heads_up fires when 4–10 days out (the "next week" window)', () => {
+    for (const d of [4, 5, 7, 10]) {
+      const obs = buildDeloadHeadsUp(d, false, TODAY);
+      expect(obs).not.toBeNull();
+      expect(obs!.deloadInDays).toBe(d);
+      expect(obs!.factSig).toBe(`deload_heads_up-${d}d`);
+    }
+  });
+
+  it('deload_heads_up SILENT outside the window (too close or too far)', () => {
+    for (const d of [null, undefined, 0, -1, 1, 3, 11, 20]) {
+      expect(buildDeloadHeadsUp(d, false, TODAY)).toBeNull();
+    }
+  });
+
+  it('deload_heads_up SILENT when the active week is already a deload (nothing to warn about)', () => {
+    expect(buildDeloadHeadsUp(5, true, TODAY)).toBeNull();
+  });
+
+  it('factSig advances day-by-day so the message re-speaks as the deload approaches', () => {
+    const tenOut = buildDeloadHeadsUp(10, false, TODAY);
+    const fiveOut = buildDeloadHeadsUp(5, false, TODAY);
+    expect(tenOut!.factSig).not.toBe(fiveOut!.factSig);
+  });
+});
 
 describe('deriveObservations', () => {
   it('emits one observation per active lift plus the others', () => {

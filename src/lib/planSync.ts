@@ -36,6 +36,7 @@ import {
   type PlanDay,
   type SplitId,
 } from './planGeneration';
+import { resolveBlockPosition } from './blockPosition';
 import type { Goal } from './goalProfile';
 import { deriveCanonicalWeek, weekRowMatchesCanonical } from '../utils/planCatchUp';
 import { normalizeTrainingWeekdays, weekdaysToOffsets } from '../utils/trainingWeekdays';
@@ -380,11 +381,6 @@ export async function ensureCurrentWeekPlan({ force = false }: EnsureArgs = {}):
       .maybeSingle();
     const blockAnchor: string = anchorRow?.week_start ?? today;
 
-    /** Same formula as the generator loop below: (weeksSince(anchor) % 4) + 1.
-     *  Reuse here so the cache can't drift from what was generated. */
-    const computeBlockWeek = (weekStart: string): number =>
-      (weeksBetween(blockAnchor, weekStart) % 4) + 1;
-
     // ── True rotation position: completed sessions before the active week ─
     // The user's position in the split rotation is fully determined by how
     // many non-recovery sessions they have actually completed before the
@@ -399,6 +395,57 @@ export async function ensureCurrentWeekPlan({ force = false }: EnsureArgs = {}):
       .eq('is_recovery', false)
       .lt('planned_date', horizonAnchor);
     const completedBeforeWeek = completedBeforeRaw ?? 0;
+
+    // ── Per-block completed session counts (earned-deload gate) ──────────
+    // Fetch every completed non-recovery session's planned_date since the
+    // block anchor, then bucket by block index (4 calendar weeks per block).
+    // Only sessions in the block's WEEKS 1–3 window (weeks 0..2 into the
+    // block) count toward "earned" — a session that happened to land in a
+    // calendar wk4 doesn't retroactively earn its own deload. See
+    // resolveBlockPosition + DELOAD_EARN_FLOOR.
+    //
+    // One fetch, one pass over the results, cheap map lookup at each
+    // materialization site — no per-week query storm.
+    const sessionsPerBlockIndex = new Map<number, number>();
+    try {
+      const { data: sessionRows } = await supabase
+        .from('workout_sessions')
+        .select('planned_date')
+        .eq('user_id', user.id)
+        .eq('completed', true)
+        .eq('is_recovery', false)
+        .gte('planned_date', blockAnchor);
+      for (const row of sessionRows ?? []) {
+        if (!row?.planned_date) continue;
+        const weeksIn = weeksBetween(blockAnchor, row.planned_date);
+        const bIndex = Math.floor(weeksIn / 4);
+        const bWeek = (weeksIn % 4) + 1;
+        // Only weeks 1–3 count toward earning the block's deload. A session
+        // that happened to land in calendar wk4 was itself part of a
+        // (possibly reset) deload week — it doesn't retroactively license
+        // that same wk4 as earned.
+        if (bWeek === 4) continue;
+        sessionsPerBlockIndex.set(bIndex, (sessionsPerBlockIndex.get(bIndex) ?? 0) + 1);
+      }
+    } catch (err) {
+      // Never break plan sync on the earned-deload count query; the helper
+      // treats a missing/zero count as "unearned", which is the safe
+      // default (resets rather than materializes a phantom deload).
+      Sentry.captureException(err);
+    }
+
+    /** Resolve the calendar (blockIndex, blockWeek) position for a given
+     *  week_start, applying the earned-deload gate. Single source of truth
+     *  the loop below AND the cache refresh AND the self-heal all funnel
+     *  through — they cannot disagree by construction. */
+    const resolvePosition = (weekStart: string) => {
+      const weeksFromAnchor = weeksBetween(blockAnchor, weekStart);
+      const rawIndex = Math.floor(weeksFromAnchor / 4);
+      return resolveBlockPosition({
+        weeksFromAnchor,
+        blockCompletedSessions: sessionsPerBlockIndex.get(rawIndex) ?? 0,
+      });
+    };
 
     // ── Active-week self-heal check ──────────────────────────────────────
     // The stored active row is a cache of the canonical generation, not a
@@ -429,6 +476,12 @@ export async function ensureCurrentWeekPlan({ force = false }: EnsureArgs = {}):
       // place sessions on Sun/Tue/Thu instead, never matching the stored
       // weekday-correct row).
       const healOffsets = weekdaysToOffsets(trainingWeekdays, horizonAnchor);
+      // Self-heal canonical must use the SAME earned-deload gate as the
+      // materialization loop below — otherwise a corrected non-deload
+      // active week would keep healing back into an unearned deload on
+      // next open. resolvePosition applies the gate; the derived
+      // canonical row matches what the loop would (re)generate.
+      const healPos = resolvePosition(horizonAnchor);
       const canonical = deriveCanonicalWeek({
         weekStartIso: horizonAnchor,
         completedBeforeWeek,
@@ -437,8 +490,8 @@ export async function ensureCurrentWeekPlan({ force = false }: EnsureArgs = {}):
         location,
         split,
         goal,
-        blockIndex: Math.floor(weeksBetween(blockAnchor, horizonAnchor) / 4),
-        blockWeek: computeBlockWeek(horizonAnchor),
+        blockIndex: healPos.blockIndex,
+        blockWeek: healPos.blockWeek,
         selectedDayOffsets: healOffsets ?? undefined,
       });
       return weekRowMatchesCanonical(stored, canonical);
@@ -495,7 +548,7 @@ export async function ensureCurrentWeekPlan({ force = false }: EnsureArgs = {}):
             JSON.stringify({
               generatedAt: new Date().toISOString(),
               weekStart: coveringNow.week_start,
-              blockWeek: computeBlockWeek(coveringNow.week_start),
+              blockWeek: resolvePosition(coveringNow.week_start).blockWeek,
               days,
             }),
           );
@@ -536,12 +589,12 @@ export async function ensureCurrentWeekPlan({ force = false }: EnsureArgs = {}):
     for (let i = 0; i < wantedStarts.length; i++) {
       const ws = wantedStarts[i];
       if (isSatisfied(ws, i)) continue;
-      const weeksFromAnchor = weeksBetween(blockAnchor, ws);
-      const blockIndex = Math.floor(weeksFromAnchor / 4);
-      // In-block week (1..4). Week 4 is the deload — generatePlan reduces
-      // sets/reps and stamps PlanDay.deload=true. Computed purely from the
-      // anchor distance so it's deterministic on regenerate.
-      const blockWeek = (weeksFromAnchor % 4) + 1;
+      // Position resolved through the earned-deload gate. When the block's
+      // weeks 1–3 weren't trained (sessionsPerBlockIndex[rawIndex] <
+      // DELOAD_EARN_FLOOR), the calendar week-4 rolls to (rawIndex+1, 1)
+      // instead of stamping a phantom deload. Weeks 1–3 pass through
+      // unchanged, so a real trained block's deload still lands.
+      const { blockIndex, blockWeek } = resolvePosition(ws);
       // Per-week offsets from the user's stored weekdays. Each row is its
       // own 7-day window anchored at `ws`, so the offset values depend on
       // ws's day-of-week — Mon/Wed/Fri lands at [1,3,5] from a Sunday
@@ -613,7 +666,7 @@ export async function ensureCurrentWeekPlan({ force = false }: EnsureArgs = {}):
         JSON.stringify({
           generatedAt: new Date().toISOString(),
           weekStart: cacheWeekStart,
-          blockWeek: computeBlockWeek(cacheWeekStart),
+          blockWeek: resolvePosition(cacheWeekStart).blockWeek,
           days: cacheDays,
         }),
       );

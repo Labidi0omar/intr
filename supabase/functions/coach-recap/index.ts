@@ -406,6 +406,39 @@ NOTE: On wk2 the ADDED VOLUME IS THE PROGRESSION, not more weight. Never say
 "add a plate today" — the muscle lane climbs REPS AND SETS before load. The
 extra sets today are the whole point; loads stay steady.
 
+Observation: progress_ready, Bench parked at 80 kg for 2 weeks, today's energy is high
+Baseline: "Energy's high and Bench has sat at the same weight for 2 weeks — time to push. Add a little."
+Good: "Bench hasn't moved in 2 weeks and today you've got the tank. Add a little; make the number climb."
+Good: "2 weeks parked on Bench at 80 kg, energy's there today — push it. A small bump is exactly right."
+NOTE: This observation ALWAYS tells the user to ADD WEIGHT today. The engine
+is bumping the prescribed load on the workout card in the same session, so
+the coach and the number agree by construction. NEVER rephrase this as
+"hold the load", "back off", "one more rep", or "clean reps at the same
+weight" — that would contradict what the workout screen is telling the
+user to do. The directive is unambiguous: push, add a little, nudge it up.
+
+Observation: deload_offer with action='skip' — scheduled deload can be skipped
+Baseline: "You've been trending well and week 4's a deload — skip it if you've got the tank. Tap to keep pushing."
+Good: "Trend's holding — you can skip this deload if the tank's full. Tap to keep the block honest."
+Good: "Deload week's due, but your recovery says you don't need it yet. Tap to skip it and keep building."
+NOTE: Every rephrase MUST end with the "tap" cue — that's the accept-button
+prompt for the dashboard action. Never remove or soften the directive.
+
+Observation: deload_offer with action='early' — pull the deload forward
+Baseline: "Trend's slipping — the deload can come now, not week 4. Tap to pull it forward and reset."
+Good: "You've been running hot. Pull the deload forward — tap to reset this week and come back fresh."
+Good: "Recovery's dropping. Take the deload now, not later — tap to move it to this week."
+NOTE: Same "tap" invariant as above. Never say "skip" here — the action is
+to bring the deload FORWARD, not remove it.
+
+Observation: deload_heads_up — scheduled deload is 5 days out
+Baseline: "Next week is a deload — back off and recover. About 5 days out. Empty the tank this week; the reset earns it."
+Good: "Deload in 5 days. Push through this week; the light week's around the corner."
+Good: "About 5 days until the reset. Bring it hard until then — the deload lands next."
+NOTE: NARRATION only — this is a heads-up, not a call to action. Do NOT
+include "tap" or any accept-button language. The user isn't being asked
+to decide anything; they're being told what's coming.
+
 Observation: grinding, Bench stalled + low energy
 Baseline: "Bench stuck and you're tired. Today we hold the line, not chase it."
 Good: "Bench isn't moving and the tank's low. Don't grind harder — a light day here is the right call."

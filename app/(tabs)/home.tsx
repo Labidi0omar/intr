@@ -34,6 +34,7 @@ import {
   type TodayKind,
 } from '../../src/utils/planShift';
 import { buildCatchUpRows } from '../../src/utils/planCatchUp';
+import { resolveBlockPosition } from '../../src/lib/blockPosition';
 import { computeCompletedTrainingDays } from '../../src/utils/weekProgress';
 import { ensureCurrentWeekPlan } from '../../src/lib/planSync';
 import { flushPendingSaves } from '../../src/lib/pendingSync';
@@ -58,6 +59,8 @@ import {
   writePinnedHeroFactSig,
 } from '../../src/lib/coachHeroPin';
 import {
+  buildDeloadHeadsUp,
+  buildDeloadOffer,
   computeGapDays,
   deriveObservations,
   isCompositeObservation,
@@ -1027,13 +1030,52 @@ export default function HomeScreen() {
             }
             setDeloadInDays(computedDeloadInDays);
 
-            setDeloadOffer(
-              decideDeloadOffer({
-                state: status.state,
-                blockWeek: statusBlockWeek,
+            const computedDeloadOffer = decideDeloadOffer({
+              state: status.state,
+              blockWeek: statusBlockWeek,
+              activeIsDeload,
+              // Gate the offer on real recent training (Part 2). The idle
+              // account rolling into a calendar-advanced week 4 must not
+              // be offered a skip against a deload it never earned.
+              recentCompletedSessions: status.inputs.completedSessions,
+              liftsProgressing: status.liftsProgressing,
+            });
+            setDeloadOffer(computedDeloadOffer);
+
+            // ── Part 5: surface the deload offer + heads-up as coach messages ──
+            // The offer is narrated as its own coach message so the user sees
+            // it in the coach card (in addition to the accept button on the
+            // Training Status card). The heads-up narrates an imminent
+            // scheduled deload ~1 week out. Both are appended directly here
+            // rather than routed through the observation selector — they
+            // depend on training-status output that resolves after that
+            // pass. Idempotent via appendCoachMessageOnce's dedupKey.
+            try {
+              const deloadObs: CoachObservation[] = [];
+              const offerObs = buildDeloadOffer(computedDeloadOffer, todayStr);
+              if (offerObs) deloadObs.push(offerObs);
+              const headsUpObs = buildDeloadHeadsUp(
+                computedDeloadInDays,
                 activeIsDeload,
-              }),
-            );
+                todayStr,
+              );
+              if (headsUpObs) deloadObs.push(headsUpObs);
+              if (deloadObs.length > 0) {
+                for (const obs of deloadObs) {
+                  await appendCoachMessageOnce(
+                    user.id,
+                    dedupKeyFor(obs),
+                    { text: phraseObservation(obs), kind: 'observation' },
+                  );
+                }
+                // Refresh the local state so the new messages show up on
+                // this focus rather than the next one.
+                const refreshedAfterDeload = await loadCoachMessages(user.id);
+                setCoachMessages(refreshedAfterDeload);
+              }
+            } catch (e) {
+              reportSilent(e, 'home:deloadObservations');
+            }
           } catch (e) {
             reportSilent(e, 'home:trainingStatus');
             setTrainingStatus(null);
@@ -1393,7 +1435,10 @@ export default function HomeScreen() {
         const storedLoc = await AsyncStorage.getItem('user:defaultLocation');
         const location: 'gym' | 'home' = storedLoc === 'Home' ? 'home' : 'gym';
 
-        // Block math from the user's plan anchor.
+        // Block math from the user's plan anchor. The raw calendar position
+        // goes through resolveBlockPosition with the earned-deload count so
+        // an idle returner resuming into a calendar wk4 doesn't get a
+        // phantom deload materialized in the resume pack.
         const blockAnchor = (anchorRowRes.data?.week_start as string | undefined) ?? todayStr;
         const weeksFromAnchorToToday = (() => {
           const a = blockAnchor.split('-').map(Number);
@@ -1402,8 +1447,36 @@ export default function HomeScreen() {
           const db = new Date(b[0], b[1] - 1, b[2]).getTime();
           return Math.max(0, Math.round((db - da) / 86400000 / 7));
         })();
-        const blockIndex = Math.floor(weeksFromAnchorToToday / 4);
-        const blockWeek = (weeksFromAnchorToToday % 4) + 1;
+        const rawBlockIndex = Math.floor(weeksFromAnchorToToday / 4);
+        // Sessions completed inside the CURRENT block's weeks 1–3. Same
+        // shape as the per-block bucket planSync builds (see
+        // sessionsPerBlockIndex there) — we just need the current block's
+        // count for this materialization.
+        const blockStartIso = (() => {
+          const a = blockAnchor.split('-').map(Number);
+          const d = new Date(a[0], a[1] - 1, a[2] + rawBlockIndex * 28);
+          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        })();
+        const blockWk3EndExclusiveIso = (() => {
+          const a = blockAnchor.split('-').map(Number);
+          const d = new Date(a[0], a[1] - 1, a[2] + rawBlockIndex * 28 + 21);
+          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        })();
+        const { count: blockCountRaw } = await supabase
+          .from('workout_sessions')
+          .select('id', { count: 'exact', head: true })
+          .eq('user_id', user.id)
+          .eq('completed', true)
+          .eq('is_recovery', false)
+          .gte('planned_date', blockStartIso)
+          .lt('planned_date', blockWk3EndExclusiveIso);
+        const blockCompletedSessions = blockCountRaw ?? 0;
+        const resolvedPos = resolveBlockPosition({
+          weeksFromAnchor: weeksFromAnchorToToday,
+          blockCompletedSessions,
+        });
+        const blockIndex = resolvedPos.blockIndex;
+        const blockWeek = resolvedPos.blockWeek;
 
         const completedCount = (totalCompletedRes as any).count ?? 0;
 
@@ -1470,6 +1543,11 @@ export default function HomeScreen() {
           planHistory,
           blockIndex,
           blockWeek,
+          // Feed the earned-deload count through so buildCatchUpRows's
+          // future-segment materialization also applies the gate — an idle
+          // returner (0 sessions in this block) never sees a phantom deload
+          // in the resume pack, regardless of which calendar week rolls in.
+          blockCompletedSessions,
           // Stable 7-day grid pinned to the user's plan anchor so two
           // catch-up runs on different weekdays produce IDENTICAL row
           // boundaries (no partially-overlapping rows that map the
@@ -1981,12 +2059,39 @@ export default function HomeScreen() {
               : null;
             const heroMsg = pinnedMsg ?? trainingCandidates[0];
             const unseen = latestUnseen(coachMessages);
+            // Part 5: when the hero message is a deload_offer, render the
+            // accept button INLINE beneath it so the offer is actionable
+            // from the coach surface (in addition to the Training Status
+            // card button). The dedupKey encodes the action ('early' /
+            // 'skip') via the observation id prefix.
+            const heroDedupKey = heroMsg.dedupKey ?? '';
+            const isSkipOffer = heroDedupKey.startsWith('obs:deload_offer:skip:');
+            const isEarlyOffer = heroDedupKey.startsWith('obs:deload_offer:early:');
             return (
-              <CoachVoiceHero
-                line={heroMsg.text}
-                trainingState={trainingStatus?.state ?? null}
-                unseen={!!unseen && unseen.id === heroMsg.id}
-              />
+              <>
+                <CoachVoiceHero
+                  line={heroMsg.text}
+                  trainingState={trainingStatus?.state ?? null}
+                  unseen={!!unseen && unseen.id === heroMsg.id}
+                />
+                {isEarlyOffer && deloadOffer === 'early' && (
+                  <Button
+                    title="Deload early?"
+                    onPress={() => applyDeloadAction('early')}
+                    loading={deloadActionLoading}
+                    style={{ marginTop: layout.spacing.md }}
+                  />
+                )}
+                {isSkipOffer && deloadOffer === 'skip' && (
+                  <Button
+                    title="Skip deload, keep pushing?"
+                    variant="ghost"
+                    onPress={() => applyDeloadAction('skip')}
+                    disabled={deloadActionLoading}
+                    style={{ marginTop: layout.spacing.md }}
+                  />
+                )}
+              </>
             );
           })()}
 
