@@ -40,12 +40,12 @@ export default function EffortScale({ selected = null, onSelect }: EffortScalePr
   // frozen theme colors without threading them through every option
   // literal. Order is Easy → Max, left-to-right — matches how the RIR
   // scale reads on the workout screen.
-  const options: Array<{
+  const options: {
     level: EffortLevel;
     label: string;
     sub: string;
     color: string;
-  }> = [
+  }[] = [
     { level: 'easy',  label: 'Easy',  sub: '4+ left',   color: colors.accentPositive },
     { level: 'solid', label: 'Solid', sub: '2–3 left',  color: colors.textPrimary },
     { level: 'hard',  label: 'Hard',  sub: '1 left',    color: colors.accentAmber },

@@ -124,7 +124,7 @@ export interface BuildCoachRecapContextArgs {
   lastWeights: Record<string, { weight: number; date: string; rir: number | null }>;
   /** Up to ~6 most recent logs per exercise, newest first (workout.tsx's
    *  exerciseHistory). May or may not carry RIR — both shapes are tolerated. */
-  exerciseHistory: Record<string, Array<{ weight_kg: number; date: string; rir?: number | null }>>;
+  exerciseHistory: Record<string, { weight_kg: number; date: string; rir?: number | null }[]>;
 }
 
 /** Days between two YYYY-MM-DD strings (b - a, rounded). Negative inputs

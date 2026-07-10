@@ -53,8 +53,8 @@ export interface SessionPrResult {
 }
 
 export function computeSessionPrs(
-  logRows: ReadonlyArray<SessionLogRow>,
-  priorLogs: ReadonlyArray<PriorLogRow>,
+  logRows: readonly SessionLogRow[],
+  priorLogs: readonly PriorLogRow[],
   sessionDate: string,
 ): SessionPrResult {
   // Best prior per exercise, excluding anything logged on/after the

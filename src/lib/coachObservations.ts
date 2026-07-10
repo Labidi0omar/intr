@@ -360,7 +360,7 @@ export interface ObservationsInput {
   liftSessions: Record<string, LiftSessionTop[]>;
   /** Today's PRs detected by the finish flow. Only populated on the
    *  workout-finish path; the dashboard focus passes [] (or omits). */
-  sessionPrs?: Array<{ lift: string; newKg: number; prevKg: number }>;
+  sessionPrs?: { lift: string; newKg: number; prevKg: number }[];
   /** Distinct training days in the last 14 / 28 calendar days. */
   trainedDays14: number;
   trainedDays28: number;
@@ -1299,7 +1299,7 @@ export function buildPushingHard(
  * read when it fires; ahead of block_position:4 (0.95).
  */
 export function buildGrinding(
-  strained: Array<LiftFact & { kind: 'stall' | 'decline' }>,
+  strained: (LiftFact & { kind: 'stall' | 'decline' })[],
   lowEnergySessions: number,
   todayIso: string,
 ): GrindingObservation | null {
@@ -1470,7 +1470,7 @@ export function deriveObservations(input: ObservationsInput): CoachObservation[]
   const progressing: LiftFact[] = liftObs
     .filter(o => o.subtype === 'up')
     .map(o => ({ name: o.lift, id: o.id, to: (o as Extract<LiftProgressionObservation, { subtype: 'up' }>).to }));
-  const strained: Array<LiftFact & { kind: 'stall' | 'decline' }> = [
+  const strained: (LiftFact & { kind: 'stall' | 'decline' })[] = [
     ...liftObs
       .filter(o => o.subtype === 'stall')
       .map(o => ({ name: o.lift, id: o.id, kind: 'stall' as const })),

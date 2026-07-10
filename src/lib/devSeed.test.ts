@@ -2,6 +2,15 @@
 // the __DEV__ guard fires. These mocks are declared BEFORE the import of
 // devSeed.ts because jest hoists jest.mock calls to the top of the file.
 
+import {
+  HISTORY_EXACT_KEYS,
+  HISTORY_PREFIX_KEYS,
+  PRESERVE_KEYS,
+  pickHistoryKeysToWipe,
+} from './devSeedKeys';
+import { seedScenario, wipeToFreshAccount } from './devSeed';
+import { supabase } from './supabase';
+
 const supabaseDeleteSpy = jest.fn();
 const supabaseUpdateSpy = jest.fn();
 const supabaseUpsertSpy = jest.fn();
@@ -70,15 +79,6 @@ jest.mock('./supabase', () => {
     },
   };
 });
-
-import {
-  HISTORY_EXACT_KEYS,
-  HISTORY_PREFIX_KEYS,
-  PRESERVE_KEYS,
-  pickHistoryKeysToWipe,
-} from './devSeedKeys';
-import { seedScenario, wipeToFreshAccount } from './devSeed';
-import { supabase } from './supabase';
 
 // These tests pin the WIPE INVENTORY. A contributor who adds a new
 // history-derived AsyncStorage key needs to also list it here, otherwise

@@ -7,6 +7,18 @@
 
 // ── Mocks ───────────────────────────────────────────────────────────────
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  allowedNumbersFor,
+  buildEdgePayload,
+  COACH_VOICE_PROMPT_VERSION,
+  phraseObservationsAI,
+  runCoachVoiceUpgrade,
+  validatePhrasing,
+} from './coachVoiceAI';
+import { phraseObservation } from './coachVoice';
+import type { Observation } from './coachObservations';
+
 jest.mock('@react-native-async-storage/async-storage', () => {
   const store: Record<string, string> = {};
   return {
@@ -41,18 +53,6 @@ jest.mock('../constants/buildInfo', () => ({
 jest.mock('./errorReporting', () => ({
   reportSilent: jest.fn(),
 }));
-
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import {
-  allowedNumbersFor,
-  buildEdgePayload,
-  COACH_VOICE_PROMPT_VERSION,
-  phraseObservationsAI,
-  runCoachVoiceUpgrade,
-  validatePhrasing,
-} from './coachVoiceAI';
-import { phraseObservation } from './coachVoice';
-import type { Observation } from './coachObservations';
 
 const asyncStore = (AsyncStorage as any).__store as Record<string, string>;
 const TODAY = '2026-06-10';

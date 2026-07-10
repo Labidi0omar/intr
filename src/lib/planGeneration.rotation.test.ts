@@ -214,7 +214,7 @@ describe('bro_split multi-week rotation', () => {
 describe('nextRotationPhase', () => {
   it('bro_split: every type maps to the next type in the rotation (arms → legs)', () => {
     // dayTypes = ['chest', 'back', 'shoulders', 'arms', 'legs'].
-    const cases: Array<[string, number]> = [
+    const cases: [string, number][] = [
       ['Chest', 1],
       ['Back', 2],
       ['Shoulders', 3],

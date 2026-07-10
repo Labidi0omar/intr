@@ -60,11 +60,11 @@ interface BootstrapArgs {
 }
 
 /** The five user-facing menu cards in display order. */
-const MENU_CARDS: ReadonlyArray<{
+const MENU_CARDS: readonly {
   key: RecoveryMenuCategory;
   title: string;
   reassurance: string;
-}> = [
+}[] = [
   {
     key: 'core',
     title: 'Core / Abs',

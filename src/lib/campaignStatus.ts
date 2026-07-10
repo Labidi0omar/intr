@@ -38,7 +38,7 @@ export interface BuildCampaignStatusArgs {
   todayLogs: CampaignTodayLog[];
   /** Up to ~6 most recent prior logs per exercise, newest first
    *  (workout.tsx's exerciseHistory). */
-  exerciseHistory: Record<string, Array<{ weight_kg: number; date: string }>>;
+  exerciseHistory: Record<string, { weight_kg: number; date: string }[]>;
 }
 
 const BLOCK_WEEKS = 4;

@@ -193,10 +193,10 @@ export interface UnfinishedTrainingAnchor {
  * resume action becomes a no-op.
  */
 export function findEarliestUnfinishedTrainingDay(
-  rows: ReadonlyArray<{
+  rows: readonly {
     weekStart: string;
-    planDays: ReadonlyArray<{ day?: string | null; date?: string | null; workoutType?: string | null }>;
-  }>,
+    planDays: readonly { day?: string | null; date?: string | null; workoutType?: string | null }[];
+  }[],
   todayIso: string,
   completedDates: ReadonlySet<string>,
   /** Resolution watermark — any planned date ≤ this ISO string is
@@ -276,10 +276,10 @@ export function shouldShowGapModalToday(
  * One date missed = one session owed, whatever the row shape.
  */
 export function countUnfinishedPastTrainingDays(
-  rows: ReadonlyArray<{
+  rows: readonly {
     weekStart: string;
-    planDays: ReadonlyArray<{ day?: string | null; date?: string | null; workoutType?: string | null }>;
-  }>,
+    planDays: readonly { day?: string | null; date?: string | null; workoutType?: string | null }[];
+  }[],
   todayIso: string,
   completedDates: ReadonlySet<string>,
   resolvedThroughIso?: string | null,

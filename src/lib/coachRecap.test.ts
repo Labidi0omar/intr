@@ -18,6 +18,20 @@
 // and a manual smoke test against a live deploy; no fake integration here.
 
 // supabase.ts transitively requires react-native (not transformed under ts-jest).
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { supabase } from './supabase';
+import {
+  buildCoachRecapContext,
+  buildFallbackRecap,
+  produceRecapMessage,
+  requestCoachRecap,
+  sanitizeRecap,
+  withTimeout,
+  type BuildCoachRecapContextArgs,
+  type CoachRecapContext,
+} from './coachRecap';
+import { appendCoachMessage, loadCoachMessages } from './coachMessages';
+
 let mockInvoke: jest.Mock;
 
 jest.mock('./supabase', () => {
@@ -38,20 +52,6 @@ jest.mock('@react-native-async-storage/async-storage', () => {
     },
   };
 });
-
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { supabase } from './supabase';
-import {
-  buildCoachRecapContext,
-  buildFallbackRecap,
-  produceRecapMessage,
-  requestCoachRecap,
-  sanitizeRecap,
-  withTimeout,
-  type BuildCoachRecapContextArgs,
-  type CoachRecapContext,
-} from './coachRecap';
-import { appendCoachMessage, loadCoachMessages } from './coachMessages';
 
 beforeEach(() => {
   mockInvoke = (supabase as any).functions.invoke as jest.Mock;
@@ -330,7 +330,7 @@ describe('buildFallbackRecap — cold start and deload', () => {
 
 describe('buildFallbackRecap — always non-empty', () => {
   it('returns a non-empty string for every salience tier', () => {
-    const cases: Array<(c: CoachRecapContext) => void> = [
+    const cases: ((c: CoachRecapContext) => void)[] = [
       c => { c.cold_start = true; },
       c => { c.deload = true; },
       c => { c.prs = ['Bench Press']; },
@@ -426,7 +426,7 @@ describe('requestCoachRecap — request payload shape', () => {
 });
 
 describe('requestCoachRecap — silent failure (still always non-throwing)', () => {
-  const cases: Array<[string, () => void]> = [
+  const cases: [string, () => void][] = [
     ['supabase error',     () => { mockInvoke.mockResolvedValueOnce({ data: null, error: { message: 'http 502' } }); }],
     ['SDK throws',         () => { mockInvoke.mockRejectedValueOnce(new Error('network down')); }],
     ['data is null',       () => { mockInvoke.mockResolvedValueOnce({ data: null, error: null }); }],

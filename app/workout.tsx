@@ -20,10 +20,6 @@ import {
   View
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
-
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Button from '../src/components/Button';
 import { EXERCISES } from '../src/constants/exercises';
@@ -37,11 +33,11 @@ import { track, getCompletedWorkoutCount } from '../src/lib/analytics';
 import { applyEnergyEffect, buildReadinessNarration, coachLineForPrescription, formatLowEnergyBanner, pickBanner, pickCoachHint, type BannerKind } from '../src/lib/coachHints';
 import { buildCampaignStatus } from '../src/lib/campaignStatus';
 import { buildCoachRecapContext, produceRecapMessage, requestCoachRecap } from '../src/lib/coachRecap';
-import { appendCoachMessage, appendCoachMessageOnce } from '../src/lib/coachMessages';
+import { appendCoachMessage, appendCoachMessageOnce , updateCoachMessageTextByFactSig } from '../src/lib/coachMessages';
 import { buildSessionPr, type Observation } from '../src/lib/coachObservations';
 import { phraseObservation, dedupKeyFor } from '../src/lib/coachVoice';
 import { runCoachVoiceUpgrade } from '../src/lib/coachVoiceAI';
-import { updateCoachMessageTextByFactSig } from '../src/lib/coachMessages';
+
 import { enqueuePendingSave, runFinishPersistence, type PendingSave } from '../src/lib/pendingSync';
 import { computeSessionPrs } from '../src/lib/prDetection';
 import { reportSilent } from '../src/lib/errorReporting';
@@ -55,6 +51,16 @@ import {
 } from '../src/lib/prescriptionPresenter';
 import { generateAdHocDay, isCompoundName, CURRENT_PLAN_VERSION, type AdHocWorkoutType } from '../src/lib/planGeneration';
 import { parseBand } from '../src/lib/goalProfile';
+import { ensureCurrentWeekPlan } from '../src/lib/planSync';
+import { applySwapToRows, extractPlanDays } from '../src/lib/planSwap';
+import { secondFrameUrl } from '../src/lib/exerciseImage';
+import { abandonModalCopy } from '../src/lib/workoutAbandon';
+import { scheduleComebackNotification } from '../src/utils/notifications';
+import { normalizeMuscle } from '../src/utils/muscleGroups';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 /** Auto-compute the reps we write into exercise_logs from the plan's rep
  *  string. Product decision: users are not prompted for reps anymore — the
@@ -81,12 +87,6 @@ function midpointFromReps(reps: string | number | null | undefined): number | nu
   if (single) return parseInt(single[1], 10);
   return null;
 }
-import { ensureCurrentWeekPlan } from '../src/lib/planSync';
-import { applySwapToRows, extractPlanDays } from '../src/lib/planSwap';
-import { secondFrameUrl } from '../src/lib/exerciseImage';
-import { abandonModalCopy } from '../src/lib/workoutAbandon';
-import { scheduleComebackNotification } from '../src/utils/notifications';
-import { normalizeMuscle } from '../src/utils/muscleGroups';
 
 // ── Pure helpers (module-scoped so they aren't recreated per render) ──
 
@@ -148,7 +148,7 @@ const PR_WINDOW_DAYS = 56;
 function findSwapAlternatives(
   target: { name: string; primaryMuscle: string },
   sessionLocation: string,
-  sessionExerciseNames: ReadonlyArray<string> = [],
+  sessionExerciseNames: readonly string[] = [],
 ): typeof EXERCISES {
   // Exclude anything the user is already doing today (case-insensitive).
   // Without this, the swap menu can offer an exercise that's already in
@@ -315,7 +315,7 @@ export default function WorkoutScreen() {
   // logged_date as the session key — one session per day per exercise is
   // the working assumption in this codebase, the same one coachObservations
   // uses on the dashboard side.
-  const [liftSessionTops, setLiftSessionTops] = useState<Record<string, Array<{ topKg: number; date: string }>>>({});
+  const [liftSessionTops, setLiftSessionTops] = useState<Record<string, { topKg: number; date: string }[]>>({});
   // Load status for the initial exercise_logs history fetch. Feeds
   // shouldShowCoachCall so the Coach's Call hero can distinguish "still
   // loading" from "genuinely no history yet." A silent fetch failure
@@ -807,7 +807,7 @@ export default function WorkoutScreen() {
         // Convert each date-map to an oldest-first array — the order
         // applyStallNudge expects (it sorts internally too, but
         // pre-sorting here keeps the contract explicit).
-        const topsArr: Record<string, Array<{ topKg: number; date: string }>> = {};
+        const topsArr: Record<string, { topKg: number; date: string }[]> = {};
         for (const [name, m] of Object.entries(tops)) {
           topsArr[name] = Array.from(m.entries())
             .map(([date, topKg]) => ({ date, topKg }))
@@ -1018,7 +1018,7 @@ export default function WorkoutScreen() {
       // key isn't in prev at all, so the merge is additive.
       setLastWeights(prev => ({ ...partialLatest, ...prev }));
       setExerciseHistory(prev => ({ ...partialGrouped, ...prev }));
-      const partialTopsArr: Record<string, Array<{ topKg: number; date: string }>> = {};
+      const partialTopsArr: Record<string, { topKg: number; date: string }[]> = {};
       for (const [name, m] of Object.entries(partialTops)) {
         partialTopsArr[name] = Array.from(m.entries())
           .map(([date, topKg]) => ({ date, topKg }))
@@ -1611,7 +1611,7 @@ export default function WorkoutScreen() {
       // name) — never weightLog state, which can lag the final commit.
       // computeSessionPrs also drops any prior row dated on/after today, so
       // the session's own just-saved rows can't suppress genuine PRs.
-      let prMeta: Array<{ name: string; newWeightKg: number; prevBestKg: number }> = [];
+      let prMeta: { name: string; newWeightKg: number; prevBestKg: number }[] = [];
       if (logRows.length > 0) {
         try {
           const result = computeSessionPrs(logRows, persistence.priorLogs, logDate);

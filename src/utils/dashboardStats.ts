@@ -84,7 +84,7 @@ export interface StrengthTrend {
    *  Training Status engine can count progressing vs declining lifts without
    *  re-windowing. Empty when nothing overlapped both windows. Optional so
    *  callers building partial fixtures stay valid. */
-  perLift?: Array<{ name: string; deltaKg: number }>;
+  perLift?: { name: string; deltaKg: number }[];
   /** The single biggest mover — the compared lift with the greatest signed
    *  delta. Lets the dashboard say "Squat +5 kg" instead of an aggregate.
    *  null when nothing overlapped both windows. Can be negative in a down
@@ -165,7 +165,7 @@ export function computeStrengthTrendFromLogs(
 
   let total = 0;
   let compared = 0;
-  const perLift: Array<{ name: string; deltaKg: number }> = [];
+  const perLift: { name: string; deltaKg: number }[] = [];
   let topMover: { name: string; deltaKg: number } | null = null;
   for (const [name, { recentMax, priorMax }] of acc.entries()) {
     if (recentMax == null || priorMax == null) continue;

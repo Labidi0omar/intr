@@ -26,7 +26,12 @@ import {
   generateRecoverySession,
   type GenerateRecoverySessionArgs,
   type RecoverySession,
-} from './recoveryGeneration';
+ type RecoveryMenuCategory } from './recoveryGeneration';
+
+// ── Single-category (menu-driven) generation ─────────────────────────
+// Covers the new rest-day picker path: the user picks a menu category
+// and the generator returns a session of ONLY that category.
+
 
 const baseArgs: GenerateRecoverySessionArgs = {
   split: 'ppl',
@@ -306,12 +311,6 @@ describe('generateRecoverySession — location filtering', () => {
     expect(session.location).toBe('home');
   });
 });
-
-// ── Single-category (menu-driven) generation ─────────────────────────
-// Covers the new rest-day picker path: the user picks a menu category
-// and the generator returns a session of ONLY that category.
-
-import { type RecoveryMenuCategory } from './recoveryGeneration';
 
 describe('generateRecoverySession — single-category mode', () => {
   it('cardio: all picked items are cardio, length 1, note is conversational pace', () => {

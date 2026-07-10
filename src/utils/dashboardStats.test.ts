@@ -2,8 +2,6 @@
 // dashboardStats.ts module-imports the supabase client, which transitively
 // requires react-native (not transformed by this project's jest setup).
 // Mock both before SUT import so the pure-logic tests below can run.
-jest.mock('../lib/supabase', () => ({ supabase: {} }));
-
 import {
   computeEffortZoneFromLogs,
   computeStrengthTrendFromLogs,
@@ -11,6 +9,8 @@ import {
   formatStrengthTrend,
   type ExerciseLogRow,
 } from './dashboardStats';
+
+jest.mock('../lib/supabase', () => ({ supabase: {} }));
 
 const TODAY = new Date(2026, 5, 1); // 2026-06-01 (pin for stable windows)
 

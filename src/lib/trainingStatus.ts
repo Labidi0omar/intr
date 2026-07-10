@@ -36,7 +36,7 @@ export interface TrainingStatusInputs {
    *  (recentMax − priorMax), one entry per lift with numeric logs in BOTH
    *  sub-windows. Sourced from computeStrengthTrendFromLogs().perLift. Empty
    *  when nothing overlapped both windows (new user / no numeric overlap). */
-  liftDeltas: ReadonlyArray<{ name: string; deltaKg: number }>;
+  liftDeltas: readonly { name: string; deltaKg: number }[];
   /** Completed vs planned training sessions over the window. plannedSessions
    *  === 0 means "no plan data" — adherence is treated as neutral, never as a
    *  penalty (so a brand-new account isn't marked 🔴 for an empty schedule). */

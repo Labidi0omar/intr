@@ -3,6 +3,15 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { reportSilent } from '../lib/errorReporting';
 
+import {
+  COMEBACK_DELAY_SECONDS,
+  extractPlannedDays,
+  isStreakAtRisk,
+  pickDefaultNotifTime,
+  secondsUntilStreakProtection,
+  type NotifTime,
+} from './notificationsPure';
+
 export const NOTIF_TIME_KEY = 'intr_notification_time';
 export const NOTIF_PERMISSION_ASKED_KEY = 'intr_notif_permission_asked';
 export const COMEBACK_DATA_TAG = 'comeback';
@@ -21,15 +30,6 @@ export {
   pickDefaultNotifTime,
   secondsUntilStreakProtection,
   shouldRescheduleComeback,
-  type NotifTime,
-} from './notificationsPure';
-
-import {
-  COMEBACK_DELAY_SECONDS,
-  extractPlannedDays,
-  isStreakAtRisk,
-  pickDefaultNotifTime,
-  secondsUntilStreakProtection,
   type NotifTime,
 } from './notificationsPure';
 

@@ -11,6 +11,21 @@
 //   5. wasFresh is reported correctly so the workout_completed analytics
 //      gate in finishWorkout stays honest.
 
+import * as Sentry from '@sentry/react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { supabase } from './supabase';
+import {
+  attemptSave,
+  attemptSaveWithRetry,
+  clearPendingSave,
+  enqueuePendingSave,
+  flushPendingSaves,
+  loadPendingSave,
+  runDurableSave,
+  runFinishPersistence,
+  type PendingSave,
+} from './pendingSync';
+
 jest.mock('@sentry/react-native', () => ({
   captureException: jest.fn(),
   captureMessage: jest.fn(),
@@ -83,21 +98,6 @@ jest.mock('./supabase', () => {
   };
   return { supabase };
 });
-
-import * as Sentry from '@sentry/react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { supabase } from './supabase';
-import {
-  attemptSave,
-  attemptSaveWithRetry,
-  clearPendingSave,
-  enqueuePendingSave,
-  flushPendingSaves,
-  loadPendingSave,
-  runDurableSave,
-  runFinishPersistence,
-  type PendingSave,
-} from './pendingSync';
 
 const mock = (supabase as any).__mock as {
   enqueue: (k: string, r: { data: unknown; error: unknown }) => void;

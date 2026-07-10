@@ -49,7 +49,7 @@ export interface PlanRowLike {
 export interface DeloadTransformArgs {
   /** Rows from today forward (caller pre-filters to week_start >= today-6 so
    *  the row covering today is included). */
-  rows: ReadonlyArray<PlanRowLike>;
+  rows: readonly PlanRowLike[];
   /** Local YYYY-MM-DD. Days dated strictly before this are left untouched —
    *  the change applies from today forward only. A missing date (legacy row)
    *  is treated as eligible. */

@@ -21,7 +21,7 @@ export interface DatedEntryLike {
  * "you've journaled today" view instead of the editor + submit.
  */
 export function hasEntryForDate(
-  entries: ReadonlyArray<DatedEntryLike | null | undefined> | null | undefined,
+  entries: readonly (DatedEntryLike | null | undefined)[] | null | undefined,
   today: string | null | undefined,
 ): boolean {
   if (!today) return false;

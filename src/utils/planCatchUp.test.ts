@@ -42,8 +42,8 @@ function addDays(anchor: string, n: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function flatten(rows: { planDays: Array<{ date?: string; workoutType: string }> }[]): Array<{ date: string; workoutType: string }> {
-  const out: Array<{ date: string; workoutType: string }> = [];
+function flatten(rows: { planDays: { date?: string; workoutType: string }[] }[]): { date: string; workoutType: string }[] {
+  const out: { date: string; workoutType: string }[] = [];
   for (const row of rows) {
     for (const d of row.planDays) {
       if (d.date) out.push({ date: d.date, workoutType: d.workoutType });
@@ -562,7 +562,7 @@ function endOf(row: { weekStart: string }): string {
   return addDays(row.weekStart, 6);
 }
 
-function pairsOverlap(rows: Array<{ weekStart: string }>): boolean {
+function pairsOverlap(rows: { weekStart: string }[]): boolean {
   const sorted = [...rows].sort((a, b) =>
     a.weekStart < b.weekStart ? -1 : a.weekStart > b.weekStart ? 1 : 0,
   );
@@ -572,7 +572,7 @@ function pairsOverlap(rows: Array<{ weekStart: string }>): boolean {
   return false;
 }
 
-function everyDayIsInsideItsRow(rows: Array<{ weekStart: string; planDays: Array<{ date?: string }> }>): boolean {
+function everyDayIsInsideItsRow(rows: { weekStart: string; planDays: { date?: string }[] }[]): boolean {
   for (const row of rows) {
     const end = endOf(row);
     for (const d of row.planDays) {
@@ -705,7 +705,7 @@ describe('healCurrentWeekRow — corrupted current week self-heals', () => {
     blockIndex: 0,
     blockWeek: 1,
   };
-  const pairs = (days: Array<{ date?: string; workoutType: string }>) =>
+  const pairs = (days: { date?: string; workoutType: string }[]) =>
     days
       .map(d => ({ date: d.date, workoutType: d.workoutType }))
       .sort((a, b) => (a.date! < b.date! ? -1 : 1));

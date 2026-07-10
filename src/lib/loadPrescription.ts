@@ -288,7 +288,7 @@ export interface StallNudgeInput {
   base: Prescription;
   /** Per-session top weight + date for THIS lift, any order. The augment
    *  sorts and walks internally. */
-  liftHistory: ReadonlyArray<{ topKg: number; date: string }>;
+  liftHistory: readonly { topKg: number; date: string }[];
   /** Most recent RIR (0..5). null = unknown — treated as "not clean" so the
    *  nudge stays silent rather than guessing. */
   lastRir: number | null;

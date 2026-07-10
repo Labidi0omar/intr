@@ -49,7 +49,7 @@ export default function PreviewHubScreen() {
   // generator hasn't seen /preview/* until the dev server rebuilds
   // route types. The cast keeps the preview namespace self-contained
   // without asking the reviewer to run a build first.
-  const entries: Array<{ title: string; subtitle: string; href: string }> = [
+  const entries: { title: string; subtitle: string; href: string }[] = [
     {
       title: 'Primitives Gallery',
       subtitle: 'Every component, every state, the accent legend.',

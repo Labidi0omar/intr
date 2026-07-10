@@ -528,7 +528,7 @@ describe('shouldShowGapModalToday', () => {
   it('LOOP REPRO: fallback-only gap must not re-show after ackGap sets the watermark', () => {
     // Survey window rows: none with unfinished past training days
     // (empty — the dormant account's misses fall outside the window).
-    const surveyRows: Array<{ weekStart: string; planDays: any[] }> = [];
+    const surveyRows: { weekStart: string; planDays: any[] }[] = [];
     const completedDates = new Set<string>();
     const detectedReturnGap = 14; // legacy fallback signal, >= 3
 

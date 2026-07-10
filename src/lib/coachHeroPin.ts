@@ -102,7 +102,7 @@ function isRestFactSig(factSig: string | null | undefined): boolean {
  * back-compat with the v1 contract; when omitted, no coherence guard.
  */
 export function chooseHeroFactSig(
-  pickedFactSigs: ReadonlyArray<string>,
+  pickedFactSigs: readonly string[],
   availableFactSigs: ReadonlySet<string>,
   pinnedFactSig: string | null,
   todayKind?: HeroTodayKind,

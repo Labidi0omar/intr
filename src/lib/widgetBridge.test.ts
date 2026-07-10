@@ -6,6 +6,8 @@
 // the SUT's `import AsyncStorage from '@react-native-async-storage/async-storage'`
 // resolves to this mock rather than the real native bridge module.
 
+import { setWidgetData, WIDGET_KEYS } from './widgetBridge';
+
 let store: Record<string, string> = {};
 let multiSetImpl: (kv: [string, string][]) => Promise<void> = async (kv) => {
   for (const [k, v] of kv) store[k] = v;
@@ -17,8 +19,6 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
     multiSet: (kv: [string, string][]) => multiSetImpl(kv),
   },
 }));
-
-import { setWidgetData, WIDGET_KEYS } from './widgetBridge';
 
 beforeEach(() => {
   store = {};

@@ -16,6 +16,14 @@
 // server-side service-role call. The unit-level guarantees above are the
 // shape the live integration test (manual smoke on deploy) verifies.
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { supabase } from './supabase';
+import {
+  isBearerAuthorization,
+  performDeleteAccount,
+  requestDeleteAccount,
+} from './deleteAccount';
+
 jest.mock('@react-native-async-storage/async-storage', () => {
   const store: Record<string, string> = {};
   const clear = jest.fn(async () => {
@@ -38,14 +46,6 @@ jest.mock('./supabase', () => {
   const signOut = jest.fn();
   return { supabase: { functions: { invoke }, auth: { signOut } } };
 });
-
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { supabase } from './supabase';
-import {
-  isBearerAuthorization,
-  performDeleteAccount,
-  requestDeleteAccount,
-} from './deleteAccount';
 
 const asyncStore = (AsyncStorage as any).__store as Record<string, string>;
 const mockInvoke = (supabase as any).functions.invoke as jest.Mock;

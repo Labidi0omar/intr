@@ -161,7 +161,7 @@ describe('buildPrescriptionHero', () => {
     // the delta label says "Same as last" the reason must not say "up";
     // if the delta is positive the reason must not say "down" or
     // "ease down"; if the delta is negative the reason must not say "up".
-    const grid: Array<{ suggested: number; last: number; rationale: any; cause: any }> = [
+    const grid: { suggested: number; last: number; rationale: any; cause: any }[] = [
       // Plate-capped progression — the original bug.
       { suggested: 20, last: 20, rationale: 'progress', cause: 'rir' },
       // Real progression.
@@ -210,7 +210,7 @@ describe('buildPrescriptionHero', () => {
     // other reason line.
     const causes = ['rir', 'failure', 'low_energy', 'time_to_progress', 'unknown'] as const;
     const rirSignals = [true, false] as const;
-    const energies: Array<number | undefined> = [undefined, 1, 2, 3, 4, 5];
+    const energies: (number | undefined)[] = [undefined, 1, 2, 3, 4, 5];
     const banned = [
       'reps in reserve',
       'adding load',

@@ -40,14 +40,14 @@ export interface EdgePhrasePayload {
    *  the model to address the user by name occasionally, not every line.
    *  Never required; older callers that omit it are unaffected. */
   userName?: string;
-  observations: Array<{
+  observations: {
     factSig: string;
     observationType: Observation['type'];
     /** Numbers and the lift name only — no free-text. The shape per
      *  observationType is the same one coachObservations builds. */
     facts: Record<string, string | number>;
     deterministicLine: string;
-  }>;
+  }[];
 }
 
 interface EdgePhraseResponse {

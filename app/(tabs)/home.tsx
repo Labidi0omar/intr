@@ -47,11 +47,6 @@ import {
   type CoachMessage,
 } from '../../src/lib/coachMessages';
 import { useTabScroll } from '../../src/context/TabScrollContext';
-
-// Pager index of the Coach sub-tab. Hardcoded to avoid a circular import
-// from TabLayout (which already imports this screen). Kept in sync with
-// WORKOUT_SUB_TABS in src/components/TabLayout.tsx.
-const COACH_SUB_TAB_INDEX = 3;
 import { runCoachVoiceUpgrade } from '../../src/lib/coachVoiceAI';
 import {
   chooseHeroFactSig,
@@ -91,10 +86,6 @@ import {
   type PlanRowLike as DeloadPlanRowLike,
 } from '../../src/lib/planDeload';
 import { setWidgetData } from '../../src/lib/widgetBridge';
-
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
 import {
   calculateStreak,
   calculateMonthlyConsistency,
@@ -105,6 +96,15 @@ import {
   computeStrengthTrend,
   type StrengthTrend,
 } from '../../src/utils/dashboardStats';
+
+// Pager index of the Coach sub-tab. Hardcoded to avoid a circular import
+// from TabLayout (which already imports this screen). Kept in sync with
+// WORKOUT_SUB_TABS in src/components/TabLayout.tsx.
+const COACH_SUB_TAB_INDEX = 3;
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 // --- Types ---
 type Profile = {
@@ -575,7 +575,7 @@ export default function HomeScreen() {
             const dd = new Date(p[0], p[1] - 1, p[2] + off);
             return `${dd.getFullYear()}-${String(dd.getMonth() + 1).padStart(2, '0')}-${String(dd.getDate()).padStart(2, '0')}`;
           };
-          const upcoming: Array<{ d: any; date: string }> = planDaysArray
+          const upcoming: { d: any; date: string }[] = planDaysArray
             .map((d: any) => ({ d, date: resolveDate(d) }))
             .filter((x: any): x is { d: any; date: string } =>
               !!x.date && x.date >= todayStr && !completedNames.has(x.d.day),
@@ -670,7 +670,7 @@ export default function HomeScreen() {
             // names with spaces ("Bench Press") do not need a fragile
             // string-delimiter trick.
             const perLiftSession = new Map<string, Map<string, { topKg: number; date: string }>>();
-            for (const row of rawLogs as Array<{ exercise_name: string; weight_kg: any; logged_date: string; session_id: string | null }>) {
+            for (const row of rawLogs as { exercise_name: string; weight_kg: any; logged_date: string; session_id: string | null }[]) {
               if (!row?.exercise_name || !row?.logged_date) continue;
               const w = parseWeightKg(row.weight_kg);
               if (w == null) continue;
@@ -699,7 +699,7 @@ export default function HomeScreen() {
               obsSessionsRes && !(obsSessionsRes as any).error
                 ? ((obsSessionsRes as any).data ?? [])
                 : []
-            ) as Array<{ planned_date: string }>;
+            ) as { planned_date: string }[];
 
             const iso14 = (() => {
               const d = new Date(todayDate); d.setDate(d.getDate() - 13);
@@ -779,7 +779,7 @@ export default function HomeScreen() {
               return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
             })();
             let obsLowEnergySessions = 0;
-            for (const s of completedDates as Array<{ planned_date: string; energy_level?: string | null; energy_score?: number | null }>) {
+            for (const s of completedDates as { planned_date: string; energy_level?: string | null; energy_score?: number | null }[]) {
               if (!s.planned_date || s.planned_date < obsIso21) continue;
               const hasScore = s.energy_score != null;
               const isLow = hasScore ? (s.energy_score as number) <= 2 : s.energy_level === 'low';
@@ -946,7 +946,7 @@ export default function HomeScreen() {
               obsSessionsRes && !(obsSessionsRes as any).error
                 ? ((obsSessionsRes as any).data ?? [])
                 : []
-            ) as Array<{ planned_date: string; energy_level: string | null; energy_score: number | null }>;
+            ) as { planned_date: string; energy_level: string | null; energy_score: number | null }[];
             const tsIso = (daysBack: number): string => {
               const d = new Date(todayDate);
               d.setDate(d.getDate() - daysBack);
@@ -1164,9 +1164,9 @@ export default function HomeScreen() {
             .lte('planned_date', todayStr),
         ]);
 
-        const surveyRows = (surveyRowsRes.data ?? []) as Array<{ plan: any; week_start: string }>;
+        const surveyRows = (surveyRowsRes.data ?? []) as { plan: any; week_start: string }[];
         const completedDates = new Set<string>(
-          ((completedRes.data ?? []) as Array<{ planned_date: string }>)
+          ((completedRes.data ?? []) as { planned_date: string }[])
             .map(r => r.planned_date)
             .filter(Boolean),
         );
@@ -1396,9 +1396,9 @@ export default function HomeScreen() {
             .maybeSingle(),
         ]);
 
-      const surveyRows = (surveyRowsRes.data ?? []) as Array<{ plan: any; week_start: string }>;
+      const surveyRows = (surveyRowsRes.data ?? []) as { plan: any; week_start: string }[];
       const completedDates = new Set<string>(
-        ((completedRes.data ?? []) as Array<{ planned_date: string }>)
+        ((completedRes.data ?? []) as { planned_date: string }[])
           .map(r => r.planned_date)
           .filter(Boolean),
       );

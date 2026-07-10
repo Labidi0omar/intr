@@ -9,6 +9,13 @@
 // gives up when both fields are missing.
 
 // Sentry needs mocking — the real RN package can't load in node.
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Sentry from '@sentry/react-native';
+import { supabase } from './supabase';
+import { ensureCurrentWeekPlan, readCachedProfileInputs } from './planSync';
+import { CURRENT_PLAN_VERSION } from './planGeneration';
+import { deriveCanonicalWeek } from '../utils/planCatchUp';
+
 jest.mock('@sentry/react-native', () => ({
   captureException: jest.fn(),
   captureMessage: jest.fn(),
@@ -96,13 +103,6 @@ jest.mock('./supabase', () => {
   };
   return { supabase };
 });
-
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Sentry from '@sentry/react-native';
-import { supabase } from './supabase';
-import { ensureCurrentWeekPlan, readCachedProfileInputs } from './planSync';
-import { CURRENT_PLAN_VERSION } from './planGeneration';
-import { deriveCanonicalWeek } from '../utils/planCatchUp';
 
 const mock = (supabase as any).__mock as {
   enqueue: (k: string, r: { data: any; error: any }) => void;
@@ -279,7 +279,7 @@ describe('ensureCurrentWeekPlan active-week self-heal', () => {
     jest.useRealTimers();
   });
 
-  const pairs = (days: Array<{ date?: string; workoutType?: string }>) =>
+  const pairs = (days: { date?: string; workoutType?: string }[]) =>
     days
       .map(d => ({ date: d.date, workoutType: d.workoutType }))
       .sort((a, b) => (a.date! < b.date! ? -1 : 1));
@@ -336,7 +336,7 @@ describe('ensureCurrentWeekPlan active-week self-heal', () => {
     // trainingDays per week (9+3=12 ≡ 0, …) → every future week is a
     // correctly-sequenced Push → Pull → Legs week.
     for (let i = 1; i < 4; i++) {
-      const plan = upserts[i].args[0].plan as Array<{ date?: string; workoutType?: string }>;
+      const plan = upserts[i].args[0].plan as { date?: string; workoutType?: string }[];
       expect(pairs(plan).map(d => d.workoutType)).toEqual(['Push', 'Pull', 'Legs']);
     }
   });

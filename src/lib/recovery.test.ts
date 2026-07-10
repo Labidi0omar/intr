@@ -3,8 +3,6 @@
 // requires react-native (not transformed by this project's jest setup). Mock
 // before SUT import so the pure-logic tests can run. Mirrors the pattern in
 // src/utils/dashboardStats.test.ts.
-jest.mock('./supabase', () => ({ supabase: {} }));
-
 // Recovery exclusion-boundary tests.
 //
 // The contract under test:
@@ -31,6 +29,8 @@ import {
   completedDateSetFromSessions,
   currentStreakFromDateSet,
 } from '../utils/streak';
+
+jest.mock('./supabase', () => ({ supabase: {} }));
 
 // Minimal PR helper that mirrors the inline check in app/workout.tsx
 // finishWorkout. Extracted into the test so we can assert the exclusion at

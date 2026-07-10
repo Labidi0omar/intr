@@ -8,6 +8,18 @@
 //   - latestUnseen returns the most recent unseen or null.
 //   - Dedup: appending the same text+createdAt twice is a no-op.
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  MAX_MESSAGES,
+  appendCoachMessage,
+  appendCoachMessageOnce,
+  latestUnseen,
+  loadCoachMessages,
+  markCoachMessagesSeen,
+  updateCoachMessageTextByFactSig,
+  type CoachMessage,
+} from './coachMessages';
+
 jest.mock('@react-native-async-storage/async-storage', () => {
   const store: Record<string, string> = {};
   return {
@@ -28,18 +40,6 @@ jest.mock('@react-native-async-storage/async-storage', () => {
     },
   };
 });
-
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import {
-  MAX_MESSAGES,
-  appendCoachMessage,
-  appendCoachMessageOnce,
-  latestUnseen,
-  loadCoachMessages,
-  markCoachMessagesSeen,
-  updateCoachMessageTextByFactSig,
-  type CoachMessage,
-} from './coachMessages';
 
 const asyncStore = (AsyncStorage as any).__store as Record<string, string>;
 

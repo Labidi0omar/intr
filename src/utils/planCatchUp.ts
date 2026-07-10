@@ -410,11 +410,11 @@ export function deriveCanonicalWeek(args: CanonicalWeekArgs): PlanDay[] {
  * healthy rows on every open. Dates + types are what corruption breaks.
  */
 export function weekRowMatchesCanonical(
-  stored: ReadonlyArray<{ date?: string | null; workoutType?: string | null }> | null | undefined,
-  canonical: ReadonlyArray<{ date?: string | null; workoutType?: string | null }>,
+  stored: readonly { date?: string | null; workoutType?: string | null }[] | null | undefined,
+  canonical: readonly { date?: string | null; workoutType?: string | null }[],
 ): boolean {
   if (!stored) return false;
-  const sig = (days: ReadonlyArray<{ date?: string | null; workoutType?: string | null }>) =>
+  const sig = (days: readonly { date?: string | null; workoutType?: string | null }[]) =>
     days
       .map(d => `${d?.date ?? ''}|${d?.workoutType ?? ''}`)
       .sort()
