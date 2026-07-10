@@ -252,8 +252,14 @@ export const text = deepFreeze({
 // code paths (and Jest) can import it without pulling in react-native.
 //
 // `standard` is the project's house curve — soft material-style ease.
-// `spring` is the default `withSpring` config used when a motion needs to
-// feel physical rather than timed.
+//
+// `spring.*` are intent-named presets — pick by feel, not by number:
+//   press   — snappy, low-mass; press/scale feedback on buttons, cards.
+//   default — the project's original spring; general physical motion.
+//   gentle  — soft and slower; ambient state transitions (e.g. training
+//             status color/scale shifts) where a snap would feel harsh.
+// `stagger` is the delay (ms) between successive entering animations
+// in a list — used by the MOTION.enter helper in src/components/motion.
 
 export const animation = deepFreeze({
   duration: {
@@ -267,10 +273,11 @@ export const animation = deepFreeze({
     accelerate: [0.4, 0, 1, 1] as const,
   },
   spring: {
-    stiffness: 200,
-    damping: 22,
-    mass: 1,
+    press:   { stiffness: 400, damping: 28, mass: 0.7 },
+    default: { stiffness: 200, damping: 22, mass: 1 },
+    gentle:  { stiffness: 120, damping: 20, mass: 1 },
   },
+  stagger: 55,
 });
 
 // ─── Flat color token type ─────────────────────

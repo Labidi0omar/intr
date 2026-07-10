@@ -19,7 +19,7 @@ import {
   UIManager,
   View
 } from 'react-native';
-import * as Haptics from 'expo-haptics';
+import * as haptics from '../src/lib/haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Button from '../src/components/Button';
 import { EXERCISES } from '../src/constants/exercises';
@@ -452,7 +452,7 @@ export default function WorkoutScreen() {
         if (prev === null) return null;
         if (prev <= 1) {
           clearRest();
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+          haptics.success();
           return null;
         }
         return prev - 1;
