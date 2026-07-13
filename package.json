@@ -9,6 +9,8 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint app src",
+    "lint:reanimated-canary": "node ./scripts/lint-reanimated-canary.js",
+    "//lint": "CI / pre-commit MUST run both `npm run lint` and `npm run lint:reanimated-canary` as SEPARATE steps. Do not chain: the base lint holds ~94 grandfathered errors under a ratchet and always exits 1, which would swallow the canary's independent red signal.",
     "test": "jest",
     "db:push": "supabase db push",
     "db:verify": "supabase db reset --local"
@@ -62,6 +64,7 @@
     "@types/react": "~19.2.10",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~56.0.4",
+    "eslint-plugin-reanimated": "^2.0.1",
     "jest": "^29.7.0",
     "ts-jest": "^29.4.11",
     "typescript": "~6.0.3"
