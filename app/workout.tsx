@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Animated,
   BackHandler,
@@ -11,17 +12,31 @@ import {
   LayoutAnimation,
   Modal,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   UIManager,
   View
 } from 'react-native';
-import * as haptics from '../src/lib/haptics';
+import Reanimated, {
+  Easing,
+  FadeInDown,
+  FadeOut,
+  interpolateColor,
+  useAnimatedProps,
+  useAnimatedStyle,
+  useSharedValue,
+  withDelay,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import Svg, { Circle } from 'react-native-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Button from '../src/components/Button';
+import PressableScale from '../src/components/motion/PressableScale';
 import { EXERCISES } from '../src/constants/exercises';
 import { useTheme } from '../src/context/ThemeContext';
 import { supabase } from '../src/lib/supabase';
@@ -221,6 +236,152 @@ const formatRest = (s: number) => {
   return `${m}:${String(sec).padStart(2, '0')}`;
 };
 
+// Rest ring — sizes tuned for a big-but-not-overwhelming presence
+// inside the existing rest-timer overlay card. Stroke stays in a single
+// teal; the depletion IS the treatment, no color-alarm at low seconds.
+const REST_RING_SIZE = 220;
+const REST_RING_STROKE = 6;
+const REST_RING_RADIUS = (REST_RING_SIZE - REST_RING_STROKE) / 2;
+const REST_RING_CIRCUMFERENCE = 2 * Math.PI * REST_RING_RADIUS;
+const AnimatedCircle = Reanimated.createAnimatedComponent(Circle);
+
+// Weight-log sheet transition. The card sits at its layout-centered
+// position (keyboard-avoiding) and scales in place — a focused panel
+// appearing, not a slide up from the bottom (which had read like the
+// keyboard rising). Ease-out only, NO overshoot past 1.0 — this is
+// not a spring.
+const WEIGHT_OPEN_MS = 240;
+const WEIGHT_DISMISS_MS = 220;
+const WEIGHT_SHEET_OPEN_SCALE_FROM = 0.92;
+const WEIGHT_SHEET_DISMISS_SCALE_TO = 0.96;
+// Rest overlay fade-in on start (kept at 260ms — the handoff between
+// weight sheet dismiss and rest overlay entry works at these timings;
+// the weight sheet finishes slightly earlier than the rest overlay,
+// which just gives the rest a clean final beat on its own layer).
+const REST_OVERLAY_FADE_IN_MS = 260;
+
+// Pre-screen set-count text with a "just changed" color flash. Plain
+// text — the number is not animated (an earlier AnimatedCount attempt
+// caused four bugs and was deleted). Only the COLOR briefly pulses to
+// the current stance accent so the user sees WHICH lift's set count
+// shifted when they changed energy. Under reduce-motion this collapses
+// to a static plain-color number.
+function SessionSetsCount({
+  sets,
+  reps,
+  stanceAccent,
+  baseColor,
+  textStyle,
+  reduceMotion,
+}: {
+  sets: number;
+  reps: string;
+  stanceAccent: string;
+  baseColor: string;
+  textStyle: any;
+  reduceMotion: boolean;
+}) {
+  const flash = useSharedValue(0);
+  const prevSetsRef = useRef(sets);
+
+  useEffect(() => {
+    if (prevSetsRef.current === sets) return;
+    prevSetsRef.current = sets;
+    if (reduceMotion) return;
+    flash.set(
+      withSequence(
+        withTiming(1, { duration: 160, easing: Easing.out(Easing.quad) }),
+        withTiming(0, { duration: 260, easing: Easing.out(Easing.quad) }),
+      ),
+    );
+  }, [sets, reduceMotion, flash]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    color: interpolateColor(flash.get(), [0, 1], [baseColor, stanceAccent]),
+  }));
+
+  return (
+    <Reanimated.Text style={[textStyle, animatedStyle]}>
+      {sets} × {reps}
+    </Reanimated.Text>
+  );
+}
+
+// Complete-screen personal-best row. Compact single-line entry inside
+// the shared container card: a small gold dot marks the row, the name
+// takes the flex-1 middle and truncates gracefully if very long, and
+// the achieved weight is the gold hero on the right (unit in dimmer
+// gold, baseline-aligned). Deliberately NO delta and NO per-row "NEW
+// BEST" tag — the section header carries the celebration.
+//
+// Motion: staggered FadeInDown entrance (no bounce), and a per-row
+// one-time settle on the gold weight (opacity + scale beat, single,
+// no loop) timed so the gold "catches the light" as the row lands.
+// Reduce-motion collapses both to instant.
+function PrRow({
+  name,
+  weight,
+  hasWeight,
+  index,
+  isLast,
+  reduceMotion,
+  styles,
+}: {
+  name: string;
+  weight: number;
+  hasWeight: boolean;
+  index: number;
+  isLast: boolean;
+  reduceMotion: boolean;
+  styles: any;
+}) {
+  const settle = useSharedValue(reduceMotion ? 1 : 0);
+
+  useEffect(() => {
+    if (reduceMotion) return;
+    settle.set(
+      withDelay(
+        index * 70 + 220,
+        withTiming(1, { duration: 320, easing: Easing.out(Easing.quad) }),
+      ),
+    );
+  }, [index, reduceMotion, settle]);
+
+  const settleStyle = useAnimatedStyle(() => {
+    const t = settle.get();
+    return {
+      opacity: 0.6 + 0.4 * t,
+      transform: [{ scale: 0.96 + 0.04 * t }],
+    };
+  });
+
+  const entering = reduceMotion
+    ? undefined
+    : FadeInDown.delay(index * 70).duration(320).easing(Easing.out(Easing.quad));
+
+  return (
+    <Reanimated.View
+      entering={entering}
+      style={[styles.prRow, isLast && styles.prRowLast]}
+      accessibilityLabel={
+        `New personal best on ${name}` +
+        (hasWeight ? ` — ${weight} kilograms` : '')
+      }
+    >
+      <View style={styles.prDot} />
+      <Text style={styles.prRowName} numberOfLines={1} ellipsizeMode="tail">
+        {name}
+      </Text>
+      {hasWeight ? (
+        <Reanimated.View style={[styles.prRowWeightWrap, settleStyle]}>
+          <Text style={styles.prRowWeight}>{weight}</Text>
+          <Text style={styles.prRowWeightUnit}>kg</Text>
+        </Reanimated.View>
+      ) : null}
+    </Reanimated.View>
+  );
+}
+
 export default function WorkoutScreen() {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
@@ -250,6 +411,14 @@ export default function WorkoutScreen() {
 
   const [workout, setWorkout] = useState<Exercise[]>([]);
   const [exIndex, setExIndex] = useState(0);
+  // The DISPLAYED exercise lags the logical exIndex. exIndex advances
+  // synchronously on every commit (needed by state writes: rirLog keys,
+  // weightLogRef, prescriptions, exercise_logs) but displayedExIndex
+  // only catches up at the ONE moment rest fully clears — that's the
+  // reveal moment where the next exercise slides in. Without this
+  // split, the next exercise renders behind the rest overlay and the
+  // reveal slide animates from itself to itself.
+  const [displayedExIndex, setDisplayedExIndex] = useState(0);
   const [startTime, setStartTime] = useState<number | null>(null);
 
   const [weightLog, setWeightLog] = useState<Record<string, string>>({});
@@ -439,30 +608,145 @@ export default function WorkoutScreen() {
     return !!second && !brokenImageUrls.has(second);
   })();
 
+  // Fade-then-unmount for the rest overlay. The Reanimated withTiming
+  // fades opacity on the UI thread; a mirrored setTimeout nulls
+  // `restLeft` on the JS thread after the same duration so the overlay
+  // actually unmounts. Ref lets a fresh startRest cancel a pending
+  // unmount (rare but avoids a stuck-fade-out kill of a new rest).
+  const restFadeTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelRestFadeTimeout = () => {
+    if (restFadeTimeout.current) { clearTimeout(restFadeTimeout.current); restFadeTimeout.current = null; }
+  };
   const clearRest = () => {
     if (restInterval.current) { clearInterval(restInterval.current); restInterval.current = null; }
   };
   const startRest = (seconds: number) => {
     clearRest();
+    cancelRestFadeTimeout();
     const total = Math.max(0, Math.round(seconds || 0));
     if (total === 0) { setRestLeft(null); return; }
+    // Ring reset: full progress, linear timing to 0 over the true
+    // rest duration. Overlay opacity FADES IN from 0 (was snap-1)
+    // over ~260ms so it can hand off cleanly against the weight
+    // sheet fading down at the same time — the two matched fades
+    // are what keeps the transition from reading as "both overlays
+    // on and fighting."
+    restTotal.current = total;
+    if (reduceMotion) {
+      restOverlayOpacity.set(1);
+    } else {
+      restOverlayOpacity.set(0);
+      restOverlayOpacity.set(
+        withTiming(1, { duration: REST_OVERLAY_FADE_IN_MS, easing: Easing.out(Easing.quad) }),
+      );
+    }
+    restProgress.set(1);
+    restProgress.set(withTiming(0, { duration: total * 1000, easing: Easing.linear }));
     setRestLeft(total);
     restInterval.current = setInterval(() => {
       setRestLeft(prev => {
         if (prev === null) return null;
         if (prev <= 1) {
           clearRest();
-          haptics.success();
-          return null;
+          if (reduceMotion) {
+            // Sync forward at the exact moment the overlay unmounts —
+            // this is THE reveal instant for the reduce-motion path.
+            setDisplayedExIndex(exIndexRef.current);
+            return null;
+          }
+          // Gentle overlay fade-out. Ring is already at 0 (fraction 0),
+          // so the fade is the only thing left to see. Mirror the fade
+          // duration on the JS thread; sync displayedExIndex forward
+          // in the same tick that nulls restLeft so the exercise view
+          // catches up as the overlay unmounts.
+          restOverlayOpacity.set(
+            withTiming(0, { duration: 260, easing: Easing.out(Easing.quad) }),
+          );
+          restFadeTimeout.current = setTimeout(() => {
+            restFadeTimeout.current = null;
+            setRestLeft(null);
+            setDisplayedExIndex(exIndexRef.current);
+          }, 260);
+          return 0;
         }
         return prev - 1;
       });
     }, 1000);
   };
   const addRestTime = (delta: number) => {
-    setRestLeft(prev => (prev === null ? prev : Math.max(1, prev + delta)));
+    setRestLeft(prev => {
+      if (prev === null) return prev;
+      const newRemaining = Math.max(1, prev + delta);
+      // Bump total so the fraction remains honest; snap the ring to
+      // the new remaining/total instantly, then re-time to 0 over the
+      // new remaining. The arc visibly jumps back up — the +15s reads
+      // on the ring, not just in the number.
+      restTotal.current = restTotal.current + delta;
+      const safeTotal = Math.max(1, restTotal.current);
+      restProgress.set(newRemaining / safeTotal);
+      restProgress.set(
+        withTiming(0, { duration: newRemaining * 1000, easing: Easing.linear }),
+      );
+      return newRemaining;
+    });
   };
-  const skipRest = () => { clearRest(); setRestLeft(null); };
+  const skipRest = () => {
+    clearRest();
+    if (reduceMotion) {
+      setRestLeft(null);
+      setDisplayedExIndex(exIndexRef.current);
+      return;
+    }
+    // Fade the overlay out, then unmount. Ring keeps counting down in
+    // the shared value during the ~220ms fade; visually consistent
+    // with "skipped ahead" not "snapped away". JS-side setTimeout
+    // mirrors the fade duration to actually null restLeft AND sync
+    // displayedExIndex forward — the reveal moment.
+    restOverlayOpacity.set(
+      withTiming(0, { duration: 220, easing: Easing.out(Easing.quad) }),
+    );
+    restFadeTimeout.current = setTimeout(() => {
+      restFadeTimeout.current = null;
+      setRestLeft(null);
+      setDisplayedExIndex(exIndexRef.current);
+    }, 220);
+  };
+
+  // Weight-log sheet dismiss. Fires the exit tween (scrim opacity
+  // 1→0, card scale 1→~0.96, card opacity 1→0) and mirrors the same
+  // duration on the JS thread to null weightPhaseForEx (which
+  // unmounts the overlay) and invoke `thenAction` on the same beat.
+  // Callers that start rest do NOT pass thenAction — they call
+  // startRest separately BEFORE dismissWeightSheet so the rest
+  // overlay's fade-in runs in parallel with this fade-out. Callers
+  // that finish the workout DO pass thenAction so finishWorkout only
+  // fires once the card is fully gone (finishWorkout swaps phase,
+  // which would abort the animation mid-flight).
+  const dismissWeightSheet = (thenAction?: () => void) => {
+    cancelWeightSheetTimeout();
+    if (reduceMotion) {
+      weightScrimOpacity.set(0);
+      weightSheetScale.set(WEIGHT_SHEET_DISMISS_SCALE_TO);
+      weightSheetOpacity.set(0);
+      setWeightPhaseForEx(null);
+      thenAction?.();
+      return;
+    }
+    weightScrimOpacity.set(
+      withTiming(0, { duration: WEIGHT_DISMISS_MS, easing: Easing.out(Easing.quad) }),
+    );
+    weightSheetScale.set(
+      withTiming(WEIGHT_SHEET_DISMISS_SCALE_TO, { duration: WEIGHT_DISMISS_MS, easing: Easing.out(Easing.quad) }),
+    );
+    weightSheetOpacity.set(
+      withTiming(0, { duration: WEIGHT_DISMISS_MS, easing: Easing.out(Easing.quad) }),
+    );
+    weightSheetTimeout.current = setTimeout(() => {
+      weightSheetTimeout.current = null;
+      setWeightPhaseForEx(null);
+      thenAction?.();
+    }, WEIGHT_DISMISS_MS);
+  };
 
   const [swapModalVisible, setSwapModalVisible] = useState(false);
   const [swapAlternatives, setSwapAlternatives] = useState<typeof EXERCISES>([]);
@@ -614,12 +898,205 @@ export default function WorkoutScreen() {
   const logoScale = useRef(new Animated.Value(0.5)).current;
   const logoGlow = useRef(new Animated.Value(0)).current;
 
+  // OS reduce-motion. Functional motion (the rest ring depletion) is
+  // kept because it shows time remaining — that's information, not
+  // decoration. Only decorative slides/fades degrade to instant.
+  const [reduceMotion, setReduceMotion] = useState(false);
+  useEffect(() => {
+    let mounted = true;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then(v => { if (mounted) setReduceMotion(v); })
+      .catch(() => { /* default false is fine */ });
+    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', v => {
+      setReduceMotion(v);
+    });
+    return () => { mounted = false; sub.remove(); };
+  }, []);
+
+  // Rest-ring plumbing. `restProgress` is 1 (full) → 0 (empty), driven
+  // linearly over the true rest duration so 1 second reads as 1 second
+  // — this is a clock, not a UI transition, hence Easing.linear.
+  // `restTotal` is the current rest duration (bumped on +15s so the
+  // fraction stays honest). `restOverlayOpacity` fades the whole
+  // overlay out on skip/expiry; under reduce-motion the overlay
+  // unmounts instantly instead.
+  const restProgress = useSharedValue(0);
+  const restTotal = useRef(0);
+  const restOverlayOpacity = useSharedValue(1);
+  // Ring stroke offset: full circle drawn at progress=1 (offset 0);
+  // fully depleted at progress=0 (offset = circumference).
+  const restRingAnimatedProps = useAnimatedProps(() => ({
+    strokeDashoffset: REST_RING_CIRCUMFERENCE * (1 - restProgress.get()),
+  }));
+  const restOverlayAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: restOverlayOpacity.get(),
+  }));
+
+  // Exercise-reveal slide: horizontal glide from the right + fade
+  // whenever the *visible* exercise changes. "Visible" = no rest
+  // overlay covering it. Ties the glide to "revealed exercise
+  // differs from the last one we showed" instead of specifically to
+  // rest-clearing, so any path that advances exIndex without going
+  // through a rest period still glides. Horizontal travel (~96px)
+  // reads as "the screen moved" rather than a subtle re-fade — the
+  // vertical fade earlier was invisible on device. 280ms ease-out,
+  // no bounce. Reduce-motion skips the tween.
+  const EXERCISE_SLIDE_TRAVEL = 96;
+  const EXERCISE_SLIDE_DURATION = 280;
+  const exerciseSlideOpacity = useSharedValue(1);
+  const exerciseSlideX = useSharedValue(0);
+  const exerciseSlideStyle = useAnimatedStyle(() => ({
+    opacity: exerciseSlideOpacity.get(),
+    transform: [{ translateX: exerciseSlideX.get() }],
+  }));
+  // Seed to 0 (= initial displayedExIndex from useState) so the very
+  // first mount doesn't glide — the user just hit START and the whole
+  // active phase already rendered from scratch; an extra glide on top
+  // would read as a stutter, not a reveal.
+  const lastRevealedDisplayedRef = useRef<number>(0);
+
+  // Smooth top progress-bar advance — the calm "your effort registered"
+  // signal that replaces the earlier scale-beat on the RIR row. Every
+  // exIndex change tweens the fill width forward over ~320ms.
+  const progressWidth = useSharedValue(0);
+  const progressAnimatedStyle = useAnimatedStyle(() => ({
+    width: `${progressWidth.get() * 100}%`,
+  }));
+
+  // Weight-log sheet: scrim opacity + card scale + card opacity.
+  // Initial state is CLOSED (scrim invisible, card slightly shrunken
+  // and fully transparent) so the very first mount has real values to
+  // animate FROM. The card's own opacity is animated INDEPENDENTLY of
+  // the scrim so the card reads as "coming into focus" (fading in
+  // gradually against the scrim's own fade) instead of appearing
+  // solid at small size then growing.
+  const weightScrimOpacity = useSharedValue(0);
+  const weightSheetScale = useSharedValue(WEIGHT_SHEET_OPEN_SCALE_FROM);
+  const weightSheetOpacity = useSharedValue(0);
+  const weightScrimStyle = useAnimatedStyle(() => ({
+    opacity: weightScrimOpacity.get(),
+  }));
+  const weightSheetStyle = useAnimatedStyle(() => ({
+    opacity: weightSheetOpacity.get(),
+    transform: [{ scale: weightSheetScale.get() }],
+  }));
+  // Muscles-worked sheet swipe-down-to-dismiss. Drag translateY follows
+  // the finger downward only (upward drag pins at 0). On release, if
+  // past a distance or velocity threshold we simply set state=false and
+  // let RN Modal's own slide-out animation carry the sheet the rest of
+  // the way (our drag translateY stays where the finger left it, so
+  // there's no visual snap-up before the slide). Otherwise the sheet
+  // springs back to 0. Reduce-motion snaps both ends. The drag is reset
+  // to 0 on next open (onPress of the "Muscles worked" button), which
+  // is when the modal has already unmounted and reset is invisible.
+  const muscleSheetDragY = useSharedValue(0);
+  const muscleSheetDragStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: muscleSheetDragY.get() }],
+  }));
+
+  // JS-side unmount mirror for the dismiss animation — same pattern
+  // as the rest overlay's fade-then-unmount (piece 1).
+  const weightSheetTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelWeightSheetTimeout = () => {
+    if (weightSheetTimeout.current) {
+      clearTimeout(weightSheetTimeout.current);
+      weightSheetTimeout.current = null;
+    }
+  };
+
   useEffect(() => {
     fetchTodayPlan();
   }, []);
 
-  // Clean up the rest-timer interval if the screen unmounts mid-rest.
-  useEffect(() => () => clearRest(), []);
+  // Clean up the rest-timer interval + pending fade-out unmount timeout
+  // + pending weight-sheet dismiss timeout if the screen unmounts.
+  useEffect(() => () => {
+    clearRest();
+    cancelRestFadeTimeout();
+    cancelWeightSheetTimeout();
+  }, []);
+
+  // Mirror of exIndex read from deferred timer callbacks (the setInterval
+  // rest tick, the setTimeout fade-out mirror). Those closures capture
+  // exIndex at creation time, which was the pre-commit value — so we
+  // route reads through this ref which is updated on every render.
+  const exIndexRef = useRef(0);
+  useEffect(() => { exIndexRef.current = exIndex; }, [exIndex]);
+
+  // Exercise reveal — play the glide whenever the DISPLAYED exercise
+  // changes. displayedExIndex only advances at the moment the rest
+  // overlay actually clears (see the setTimeout mirror inside
+  // startRest / skipRest below), so this effect is the reveal itself.
+  // The commit paths pre-set slideX = TRAVEL / slideOpacity = 0
+  // synchronously the moment rest starts, which means the exercise
+  // view is already off-screen when displayedExIndex catches up —
+  // there's no one-frame "NEW appears in place, then slides" flash;
+  // the reveal begins from off-screen. Reduce-motion skips the tween.
+  useEffect(() => {
+    if (lastRevealedDisplayedRef.current === displayedExIndex) return; // no change to reveal
+    lastRevealedDisplayedRef.current = displayedExIndex;
+    if (reduceMotion) {
+      exerciseSlideOpacity.set(1);
+      exerciseSlideX.set(0);
+      return;
+    }
+    // Snap to off-screen start position BEFORE the tween. Redundant
+    // with the commit-time pre-position when rest is involved (the
+    // shared values are already at TRAVEL/0 by the time this fires),
+    // but keeps the reveal correct if a future path advances
+    // displayedExIndex without pre-positioning.
+    exerciseSlideOpacity.set(0);
+    exerciseSlideX.set(EXERCISE_SLIDE_TRAVEL);
+    exerciseSlideOpacity.set(
+      withTiming(1, { duration: EXERCISE_SLIDE_DURATION, easing: Easing.out(Easing.quad) }),
+    );
+    exerciseSlideX.set(
+      withTiming(0, { duration: EXERCISE_SLIDE_DURATION, easing: Easing.out(Easing.quad) }),
+    );
+  }, [displayedExIndex, reduceMotion, exerciseSlideOpacity, exerciseSlideX]);
+
+  // Smooth progress-bar advance on every commit (exIndex change). Under
+  // reduce-motion the width snaps instantly.
+  useEffect(() => {
+    const target = workout.length > 0 ? (exIndex + 1) / workout.length : 0;
+    if (reduceMotion) {
+      progressWidth.set(target);
+      return;
+    }
+    progressWidth.set(
+      withTiming(target, { duration: 320, easing: Easing.out(Easing.quad) }),
+    );
+  }, [exIndex, workout.length, reduceMotion, progressWidth]);
+
+  // Weight-log sheet OPEN. Fires when weightPhaseForEx transitions to
+  // a numeric value (user tapped NEXT EXERCISE / log). We snap to the
+  // closed values first so a re-open after a not-quite-finished close
+  // still starts from the shrunken + transparent state, then tween
+  // to the open values in parallel (scrim fade in + card scale to 1
+  // + card opacity to 1). Ease-out only — NO overshoot past 1.0.
+  // Reduce-motion snaps to open values instantly.
+  useEffect(() => {
+    if (weightPhaseForEx === null) return;
+    cancelWeightSheetTimeout();
+    if (reduceMotion) {
+      weightScrimOpacity.set(1);
+      weightSheetScale.set(1);
+      weightSheetOpacity.set(1);
+      return;
+    }
+    weightScrimOpacity.set(0);
+    weightSheetScale.set(WEIGHT_SHEET_OPEN_SCALE_FROM);
+    weightSheetOpacity.set(0);
+    weightScrimOpacity.set(
+      withTiming(1, { duration: WEIGHT_OPEN_MS, easing: Easing.out(Easing.quad) }),
+    );
+    weightSheetScale.set(
+      withTiming(1, { duration: WEIGHT_OPEN_MS, easing: Easing.out(Easing.quad) }),
+    );
+    weightSheetOpacity.set(
+      withTiming(1, { duration: WEIGHT_OPEN_MS, easing: Easing.out(Easing.quad) }),
+    );
+  }, [weightPhaseForEx, reduceMotion, weightScrimOpacity, weightSheetScale, weightSheetOpacity]);
 
   const fetchTodayPlan = async () => {
     setLoadingInitial(true);
@@ -1173,7 +1650,14 @@ export default function WorkoutScreen() {
     }
   };
 
-  const currentEx = workout[exIndex];
+  // The exercise the user SEES on the active card. Reads through the
+  // lagged displayedExIndex so that the current exercise view stays
+  // put while the rest overlay is up — the next exercise doesn't
+  // render behind the overlay. displayedExIndex catches up to exIndex
+  // in the same setTimeout tick that unmounts the rest overlay (see
+  // startRest / skipRest below), so the reveal slide always runs
+  // against a real content change.
+  const currentEx = workout[displayedExIndex];
 
   const handleNextExercise = () => {
     setShowMuscleDetails(false);
@@ -1247,15 +1731,26 @@ export default function WorkoutScreen() {
       commitWeight(workout[weightPhaseForEx!].name, currentWeightInput.trim());
     }
     setCurrentWeightInput('');
-    setWeightPhaseForEx(null);
 
     if (exIndex < workout.length - 1) {
       const restSecs = workout[exIndex]?.restSeconds ?? 60;
       setExIndex(prev => prev + 1);
+      // Pre-position the exercise-reveal slide OFF-SCREEN synchronously.
+      // The rest overlay covers this instant, but when displayedExIndex
+      // catches up later, the next exercise renders already at the
+      // slide's starting position (+TRAVEL / opacity 0) instead of
+      // snapping into view for one frame before the reveal tween.
+      exerciseSlideX.set(EXERCISE_SLIDE_TRAVEL);
+      exerciseSlideOpacity.set(0);
+      // Handoff: rest overlay starts fading IN while the weight sheet
+      // fades + slides DOWN in parallel (matched ~260ms). One
+      // continuous motion into rest, no double-overlay flash.
       startRest(restSecs);
+      dismissWeightSheet();
     } else {
-      // Auto-save and go to complete
-      finishWorkout();
+      // Last exercise. Slide the sheet out, THEN finish — the phase
+      // change would abort the animation if run in parallel.
+      dismissWeightSheet(() => finishWorkout());
     }
   };
 
@@ -1271,6 +1766,10 @@ export default function WorkoutScreen() {
    * user just chose instead of the previous render's snapshot).
    */
   const commitWithRir = (rir: number | null) => {
+    // No haptic — the whole app is off vibration. The calm visual
+    // acknowledgment of set commit is the top progress bar easing
+    // forward as exIndex advances (see progressAnimatedStyle), and
+    // the horizontal glide of the next exercise coming into view.
     const exName = weightPhaseForEx != null ? workout[weightPhaseForEx]?.name : undefined;
     if (exName) {
       if (rir == null) {
@@ -1326,13 +1825,18 @@ export default function WorkoutScreen() {
       setRepsLog(next);
     }
     setCurrentWeightInput('');
-    setWeightPhaseForEx(null);
     if (exIndex < workout.length - 1) {
       const restSecs = workout[exIndex]?.restSeconds ?? 60;
       setExIndex(prev => prev + 1);
+      // See handleWeightLog: pre-position the reveal slide off-screen,
+      // then hand off (rest overlay fades in as the weight sheet
+      // fades + slides down in parallel).
+      exerciseSlideX.set(EXERCISE_SLIDE_TRAVEL);
+      exerciseSlideOpacity.set(0);
       startRest(restSecs);
+      dismissWeightSheet();
     } else {
-      finishWorkout();
+      dismissWeightSheet(() => finishWorkout());
     }
   };
 
@@ -1618,6 +2122,11 @@ export default function WorkoutScreen() {
           setNewPRs(result.prs);
           setPrWeights(result.prWeights);
           prMeta = result.meta;
+          // Intentionally no PR haptic. A two-stage cheer haptic reads
+          // as gamified — the new PR treatment is an understated inline
+          // teal line ("Personal best · …") that eases in and stays;
+          // that visual restraint is the whole point, and a heavy+success
+          // buzz would undermine it.
         } catch (e) {
           reportSilent(e, 'workout:finish:prDetection');
         }
@@ -1903,8 +2412,10 @@ export default function WorkoutScreen() {
   };
 
   // ─── WORKOUT PROGRESS METER ────────────────────────────────────────
-
-  const progressPct = workout.length > 0 ? (exIndex + 1) / workout.length : 0;
+  // The progress bar's width is driven by progressAnimatedStyle above
+  // (Reanimated shared value + withTiming) so it smoothly advances on
+  // every commit. There's no plain progressPct constant any more — the
+  // useEffect that computes the target lives with the shared value.
 
   // ─── PRE CHECKIN VIEW ──────────────────────────────────────────────
 
@@ -2002,10 +2513,9 @@ export default function WorkoutScreen() {
                 }}
               >
                 {adHocChoices.map(type => (
-                  <TouchableOpacity
+                  <PressableScale
                     key={type}
                     onPress={() => startAdHocSession(type)}
-                    activeOpacity={0.7}
                     style={{
                       width: '31%',
                       paddingVertical: 18,
@@ -2028,7 +2538,7 @@ export default function WorkoutScreen() {
                     >
                       {type}
                     </Text>
-                  </TouchableOpacity>
+                  </PressableScale>
                 ))}
               </View>
               <Text
@@ -2069,21 +2579,45 @@ export default function WorkoutScreen() {
     });
     const effectiveExercises = preScreenReduction.exercises;
 
+    // Calm entrance stagger for the pre-page groups. Fade + short rise,
+    // ease-out (no spring/no bounce — no MOTION.enter here). Reduce-
+    // motion collapses to instant by dropping the `entering` prop.
+    const preEnter = (i: number) =>
+      reduceMotion
+        ? undefined
+        : FadeInDown.delay(i * 70).duration(300).easing(Easing.out(Easing.quad));
+
+    // Session-level stance derived from the same energyScore the
+    // readiness narration reads. Drives the set-count flash color when
+    // energy shifts volume. Neutral (energy=3) falls back to a soft
+    // textPrimary highlight so a revert-to-plan still reads as "this
+    // number just changed" without forcing a semantic accent.
+    const stanceForEnergy: 'conservative' | 'positive' | null =
+      energyScore <= 2 ? 'conservative' : energyScore >= 4 ? 'positive' : null;
+    const stanceAccent =
+      stanceForEnergy === 'conservative'
+        ? colors.accentAmber
+        : stanceForEnergy === 'positive'
+          ? colors.accentPositive
+          : colors.textPrimary;
+
     return (
       <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]}>
         <ScrollView contentContainerStyle={styles.preScroll} showsVerticalScrollIndicator={false}>
-          <Text style={styles.preTitle}>Today</Text>
-          <Text style={styles.preSubtitle}>{planDay.workoutType.toUpperCase()}</Text>
+          <Reanimated.View entering={preEnter(0)}>
+            <Text style={styles.preTitle}>Today</Text>
+            <Text style={styles.preSubtitle}>{planDay.workoutType.toUpperCase()}</Text>
+          </Reanimated.View>
 
           {/* Energy selector */}
-          <View style={{ marginTop: layout.spacing.xl }}>
+          <Reanimated.View entering={preEnter(1)} style={{ marginTop: layout.spacing.xl }}>
             <Text style={styles.energyHint}>
               Your energy tells the coach how to advise you.
             </Text>
             <Text style={[styles.energySectionLabel, { color: colors.textMuted }]}>HOW'S YOUR ENERGY?</Text>
             <View style={styles.energyRow}>
               {[1, 2, 3, 4, 5].map(n => (
-                <TouchableOpacity
+                <PressableScale
                   key={n}
                   style={[
                     styles.energyBox,
@@ -2097,24 +2631,24 @@ export default function WorkoutScreen() {
                     // (and the derived reductions) change.
                     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
                     setEnergyScore(n);
-                  }}
-                  activeOpacity={0.7}
-                >
+                  }}                >
                   <Text style={[styles.energyBoxText, energyScore === n && { color: colors.textPrimary }]}>
                     {n}
                   </Text>
-                </TouchableOpacity>
+                </PressableScale>
               ))}
             </View>
             <Text style={[styles.energyFeeling, { color: colors.textMuted }]}>{FEELING_WORDS[energyScore]}</Text>
-          </View>
+          </Reanimated.View>
 
           {/* Readiness narration — surfaces the autoregulator's session-level
               stance before Start. Pure, derived from energyScore via
               buildReadinessNarration; null on baseline (energy=3) so we
               don't nag with a banner that says "nothing changed". Themed
               by stance: conservative → amber (autoregulator pulling things
-              down), green → emerald positive. */}
+              down), green → emerald positive. Slide-fade on appear/stance-
+              change (keyed by stance so a flip re-mounts), FadeOut on
+              return to neutral. Reduce-motion collapses to instant. */}
           {(() => {
             const readiness = buildReadinessNarration(energyScore);
             if (!readiness) return null;
@@ -2123,7 +2657,14 @@ export default function WorkoutScreen() {
                 ? colors.accentAmber
                 : colors.accentPositive;
             return (
-              <View
+              <Reanimated.View
+                key={readiness.stance}
+                entering={
+                  reduceMotion
+                    ? undefined
+                    : FadeInDown.duration(250).easing(Easing.out(Easing.quad))
+                }
+                exiting={reduceMotion ? undefined : FadeOut.duration(180)}
                 style={[
                   styles.readinessCallout,
                   { borderColor: accent, backgroundColor: colors.surface },
@@ -2135,21 +2676,21 @@ export default function WorkoutScreen() {
                 <Text style={[styles.readinessBody, { color: colors.textPrimary }]}>
                   {readiness.text}
                 </Text>
-              </View>
+              </Reanimated.View>
             );
           })()}
 
           {/* Contextual banner */}
           {banner.kind === 'first_week' && (
-            <View style={[styles.coachBanner, { borderColor: colors.accentAmber + '40' }]}>
+            <Reanimated.View entering={preEnter(3)} style={[styles.coachBanner, { borderColor: colors.accentAmber + '40' }]}>
               <Text style={[styles.coachBannerTitle, { color: colors.accentAmber }]}>★ FIRST WEEK</Text>
               <Text style={styles.coachBannerBody}>
                 The coach is learning your patterns. Insights get sharper after each session.
               </Text>
-            </View>
+            </Reanimated.View>
           )}
           {banner.kind === 'energy_high' && (
-            <View style={[styles.coachBanner, { borderColor: colors.accentAmber }]}>
+            <Reanimated.View entering={preEnter(3)} style={[styles.coachBanner, { borderColor: colors.accentAmber }]}>
               <Text style={[styles.coachBannerTitle, { color: colors.accentAmber }]}>⚡ LOCKED IN</Text>
               <Text style={styles.coachBannerBody}>
                 {banner.setsAdded > 0
@@ -2157,37 +2698,33 @@ export default function WorkoutScreen() {
                   : 'Want to push harder today?'}
               </Text>
               <View style={styles.coachBannerActions}>
-                <TouchableOpacity
+                <PressableScale
                   style={[styles.coachActionBtn, { borderColor: colors.accentAmber }]}
-                  onPress={openAddExercise}
-                  activeOpacity={0.8}
-                >
+                  onPress={openAddExercise}                >
                   <Text style={[styles.coachActionText, { color: colors.accentAmber }]}>+ Add exercise</Text>
-                </TouchableOpacity>
+                </PressableScale>
                 {banner.addSetTarget ? (
-                  <TouchableOpacity
+                  <PressableScale
                     style={[styles.coachActionBtn, { borderColor: colors.accentAmber }]}
-                    onPress={() => addSetToTarget(banner.addSetTarget!)}
-                    activeOpacity={0.8}
-                  >
+                    onPress={() => addSetToTarget(banner.addSetTarget!)}                  >
                     <Text style={[styles.coachActionText, { color: colors.accentAmber }]}>
                       + Add set to {banner.addSetTarget.split(' ').slice(-1)[0]}
                     </Text>
-                  </TouchableOpacity>
+                  </PressableScale>
                 ) : null}
               </View>
-            </View>
+            </Reanimated.View>
           )}
           {banner.kind === 'energy_low' && (
-            <View style={[styles.coachBanner, { borderColor: colors.accentTeal + '40' }]}>
+            <Reanimated.View entering={preEnter(3)} style={[styles.coachBanner, { borderColor: colors.accentTeal + '40' }]}>
               <Text style={[styles.coachBannerTitle, { color: colors.accentTeal }]}>💧 LOW ENERGY</Text>
               <Text style={styles.coachBannerBody}>
                 {formatLowEnergyBanner(banner.reduction.setsCut, banner.reduction.exerciseDropped)}
               </Text>
-            </View>
+            </Reanimated.View>
           )}
           {banner.kind === 'energy_steady' && (
-            <View style={[
+            <Reanimated.View entering={preEnter(3)} style={[
               styles.coachBanner,
               { borderColor: banner.tone === 'sharp' ? colors.accentTeal + '40' : colors.cardBorder },
             ]}>
@@ -2204,10 +2741,11 @@ export default function WorkoutScreen() {
                   ? `${banner.line} Coach bumped reps +${banner.repBump} on every set.`
                   : banner.line}
               </Text>
-            </View>
+            </Reanimated.View>
           )}
 
           {/* Today's session — exercise list with per-exercise coach hints */}
+          <Reanimated.View entering={preEnter(4)}>
           <Text style={[styles.sessionHeader, { color: colors.textMuted }]}>TODAY'S SESSION</Text>
           <View style={styles.sessionList}>
             {effectiveExercises.map((ex, idx) => {
@@ -2235,7 +2773,14 @@ export default function WorkoutScreen() {
                   <View style={{ flex: 1 }}>
                     <View style={styles.sessionRowTop}>
                       <Text style={styles.sessionExName} numberOfLines={1}>{ex.name}</Text>
-                      <Text style={styles.sessionExSetsReps}>{ex.sets} × {ex.reps}</Text>
+                      <SessionSetsCount
+                        sets={ex.sets}
+                        reps={String(ex.reps)}
+                        stanceAccent={stanceAccent}
+                        baseColor={colors.textSecondary}
+                        textStyle={styles.sessionExSetsReps}
+                        reduceMotion={reduceMotion}
+                      />
                     </View>
                     {/* Cap raised from 2 → 4 lines. The prescription
                         coach line composes (last weight, energy band,
@@ -2252,25 +2797,24 @@ export default function WorkoutScreen() {
                       </Text>
                     ) : null}
                   </View>
-                  <TouchableOpacity
+                  <PressableScale
                     style={styles.swapIconBtn}
-                    onPress={() => openPreScreenSwap(idx)}
-                    activeOpacity={0.7}
-                  >
+                    onPress={() => openPreScreenSwap(idx)}                  >
                     <Text style={styles.swapIconText}>⇄</Text>
-                  </TouchableOpacity>
+                  </PressableScale>
                 </View>
               );
             })}
           </View>
+          </Reanimated.View>
 
-          <TouchableOpacity
-            style={[styles.workoutStartBtn, { backgroundColor: colors.accentTeal, marginTop: layout.spacing.xl }]}
-            onPress={() => handleStartWorkout()}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.workoutStartBtnText}>START WORKOUT</Text>
-          </TouchableOpacity>
+          <Reanimated.View entering={preEnter(5)}>
+            <PressableScale
+              style={[styles.workoutStartBtn, { backgroundColor: colors.accentTeal, marginTop: layout.spacing.xl }]}
+              onPress={() => handleStartWorkout()}            >
+              <Text style={styles.workoutStartBtnText}>START WORKOUT</Text>
+            </PressableScale>
+          </Reanimated.View>
         </ScrollView>
 
         {/* Swap exercise modal (also used by the active-phase swap button) */}
@@ -2284,14 +2828,12 @@ export default function WorkoutScreen() {
                 keyExtractor={item => item.id}
                 style={{ maxHeight: 400 }}
                 renderItem={({ item }) => (
-                  <TouchableOpacity
+                  <PressableScale
                     style={styles.swapOption}
-                    onPress={() => (swapTargetIndex !== null ? confirmPreScreenSwap(item) : confirmSwap(item))}
-                    activeOpacity={0.7}
-                  >
+                    onPress={() => (swapTargetIndex !== null ? confirmPreScreenSwap(item) : confirmSwap(item))}                  >
                     <Text style={styles.swapOptionName}>{item.name}</Text>
                     <Text style={styles.swapOptionDetail}>{item.sets} × {item.reps} · {item.equipment}</Text>
-                  </TouchableOpacity>
+                  </PressableScale>
                 )}
                 ListEmptyComponent={
                   <Text style={{ fontFamily: typography.family.body, color: colors.textMuted, textAlign: 'center', padding: layout.spacing.lg }}>
@@ -2299,12 +2841,12 @@ export default function WorkoutScreen() {
                   </Text>
                 }
               />
-              <TouchableOpacity
+              <PressableScale
                 style={styles.modalCancel}
                 onPress={() => { setSwapModalVisible(false); setSwapTargetIndex(null); }}
               >
                 <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
+              </PressableScale>
             </View>
           </View>
         </Modal>
@@ -2320,14 +2862,12 @@ export default function WorkoutScreen() {
                 keyExtractor={item => item.id}
                 style={{ maxHeight: 400 }}
                 renderItem={({ item }) => (
-                  <TouchableOpacity
+                  <PressableScale
                     style={styles.swapOption}
-                    onPress={() => confirmAddExercise(item)}
-                    activeOpacity={0.7}
-                  >
+                    onPress={() => confirmAddExercise(item)}                  >
                     <Text style={styles.swapOptionName}>{item.name}</Text>
                     <Text style={styles.swapOptionDetail}>{item.sets} × {item.reps} · {item.equipment}</Text>
-                  </TouchableOpacity>
+                  </PressableScale>
                 )}
                 ListEmptyComponent={
                   <Text style={{ fontFamily: typography.family.body, color: colors.textMuted, textAlign: 'center', padding: layout.spacing.lg }}>
@@ -2335,9 +2875,9 @@ export default function WorkoutScreen() {
                   </Text>
                 }
               />
-              <TouchableOpacity style={styles.modalCancel} onPress={() => setAddExerciseModalVisible(false)}>
+              <PressableScale style={styles.modalCancel} onPress={() => setAddExerciseModalVisible(false)}>
                 <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
+              </PressableScale>
             </View>
           </View>
         </Modal>
@@ -2457,38 +2997,37 @@ export default function WorkoutScreen() {
               </View>
             </View>
 
-            {/* PR celebration cards. While the prior-log fetch + detection
-                are still resolving after the optimistic phase flip, we
-                show a subtle inline placeholder instead of a blank spot —
-                so the user has an honest cue that PR celebrations may
-                still arrive a beat later. `newPRs.length > 0` supersedes
-                the placeholder the moment detection lands with results;
-                a truly PR-less session shows nothing (existing behaviour). */}
+            {/* Personal-best compact list. Matte-gold accents (dot +
+                weight + header) inside a shared dark container card so
+                multiple PRs read as a coherent siblings-of-the-lift-
+                summary list, not a stack of heavy cards. No per-row
+                "NEW BEST" tag — the section header carries the mark.
+                No delta ("+X kg") — the record and the weight are the
+                celebration, not the increment. Rows stagger in and the
+                gold weight does a one-time settle as each row lands.
+                Pending fetch → inline "Checking for PRs…"; zero PRs →
+                nothing (existing behaviour). */}
             {newPRs.length > 0 ? (
-              <View style={{ marginTop: layout.spacing.md, gap: 8 }}>
-                {newPRs.map(pr => {
-                  // Committed logged weight — the exact number persisted to
-                  // exercise_logs (snapshotted from logRows in Phase 5), not
-                  // a weightLog lookup that can be stale or name-mismatched.
-                  const newWeight = prWeights[pr] ?? NaN;
-                  const prev = lastWeights[normalizeExName(pr)]?.weight;
-                  const delta = !isNaN(newWeight) && prev !== undefined ? newWeight - prev : null;
-                  return (
-                    <View key={pr} style={styles.prCard}>
-                      <View style={styles.prCornerGlow} />
-                      <Text style={styles.prLabel}>★ NEW BEST · 8 WK</Text>
-                      <View style={styles.prRow}>
-                        <Text style={styles.prName} numberOfLines={1}>{pr}</Text>
-                        {!isNaN(newWeight) && (
-                          <Text style={styles.prWeight}>{newWeight} <Text style={styles.prWeightUnit}>kg</Text></Text>
-                        )}
-                      </View>
-                      {delta !== null && delta > 0 && (
-                        <Text style={styles.prDelta}>+{delta.toFixed(delta % 1 === 0 ? 0 : 1)} kg over last session</Text>
-                      )}
-                    </View>
-                  );
-                })}
+              <View style={styles.prLineList}>
+                <Text style={styles.prSectionLabel}>PERSONAL BESTS</Text>
+                <View style={styles.prContainer}>
+                  {newPRs.map((pr, i) => {
+                    const newWeight = prWeights[pr] ?? NaN;
+                    const hasWeight = !isNaN(newWeight);
+                    return (
+                      <PrRow
+                        key={pr}
+                        name={pr}
+                        weight={newWeight}
+                        hasWeight={hasWeight}
+                        index={i}
+                        isLast={i === newPRs.length - 1}
+                        reduceMotion={reduceMotion}
+                        styles={styles}
+                      />
+                    );
+                  })}
+                </View>
               </View>
             ) : prCheckPending ? (
               <View
@@ -2551,23 +3090,20 @@ export default function WorkoutScreen() {
 
           {/* Action buttons inside ScrollView */}
           <View style={{ paddingHorizontal: layout.spacing.lg, paddingTop: layout.spacing.lg, gap: layout.spacing.sm }}>
-            <TouchableOpacity
+            <PressableScale
               style={[styles.ctaBtn, { backgroundColor: colors.accentTeal }]}
-              onPress={goHome}
-              activeOpacity={0.8}
-            >
+              onPress={goHome}            >
               <Text style={styles.ctaBtnText}>Back to Home</Text>
-            </TouchableOpacity>
+            </PressableScale>
 
-            <TouchableOpacity
+            <PressableScale
               onPress={() => setShowShareCard(true)}
-              activeOpacity={0.7}
               style={{ alignItems: 'center', paddingVertical: layout.spacing.sm }}
             >
               <Text style={{ fontFamily: typography.family.body, fontSize: typography.size.s11, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 1 }}>
                 SHARE SESSION
               </Text>
-            </TouchableOpacity>
+            </PressableScale>
           </View>
         </ScrollView>
 
@@ -2617,14 +3153,12 @@ export default function WorkoutScreen() {
               keyExtractor={item => item.id}
               style={{ maxHeight: 400 }}
               renderItem={({ item }) => (
-                <TouchableOpacity
+                <PressableScale
                   style={styles.swapOption}
-                  onPress={() => (swapTargetIndex !== null ? confirmPreScreenSwap(item) : confirmSwap(item))}
-                  activeOpacity={0.7}
-                >
+                  onPress={() => (swapTargetIndex !== null ? confirmPreScreenSwap(item) : confirmSwap(item))}                >
                   <Text style={styles.swapOptionName}>{item.name}</Text>
                   <Text style={styles.swapOptionDetail}>{item.sets} × {item.reps} · {item.equipment}</Text>
-                </TouchableOpacity>
+                </PressableScale>
               )}
               ListEmptyComponent={
                 <Text style={{ fontFamily: typography.family.body, color: colors.textMuted, textAlign: 'center', padding: layout.spacing.lg }}>
@@ -2632,12 +3166,79 @@ export default function WorkoutScreen() {
                 </Text>
               }
             />
-            <TouchableOpacity style={styles.modalCancel} onPress={() => setSwapModalVisible(false)}>
+            <PressableScale style={styles.modalCancel} onPress={() => setSwapModalVisible(false)}>
               <Text style={styles.modalCancelText}>Cancel</Text>
-            </TouchableOpacity>
+            </PressableScale>
           </View>
         </View>
       </Modal>
+
+      {/* Muscles-worked sheet. Same pattern as the swap sheet above:
+          RN Modal, slide-up animation, modalOverlay/modalSheet/modalHandle/
+          modalTitle styles, tap-outside-to-dismiss. Mounts MuscleDetails
+          fresh each open, so the body-diagram reveal (primary muscle
+          lights up in teal, label eases in — stagger + one-time settle
+          inside MuscleDetails) plays as the sheet slides up. Reduce-motion
+          collapses the slide (animationType='none') so the sheet appears
+          instantly and MuscleDetails snaps to its resting values.
+
+          Swipe down to dismiss: a Pan gesture (JS-thread, runOnJS —
+          matches ShareCard's pattern) tracks the finger downward and
+          only downward. On release, if the user has dragged past ~100px
+          OR flicked with velocity ≥ 700 px/s, the sheet slides the rest
+          of the way off and unmounts; otherwise it springs back to 0.
+          gesture-handler's touches don't reach into an RN Modal without
+          a local GestureHandlerRootView, so we mount one inside the
+          Modal — same reason ShareCard does. */}
+      {workout.length > 0 && getMuscleInfo(workout[displayedExIndex]?.primaryMuscle ?? '') && (
+        <Modal
+          visible={showMuscleDetails}
+          animationType={reduceMotion ? 'none' : 'slide'}
+          transparent
+          onRequestClose={() => setShowMuscleDetails(false)}
+        >
+          <GestureHandlerRootView style={{ flex: 1 }}>
+            <View style={styles.modalOverlay}>
+              <Pressable
+                style={StyleSheet.absoluteFill}
+                onPress={() => setShowMuscleDetails(false)}
+                accessibilityRole="button"
+                accessibilityLabel="Close muscles worked"
+              />
+              <GestureDetector
+                gesture={Gesture.Pan()
+                  .onChange((e) => {
+                    muscleSheetDragY.set(Math.max(0, e.translationY));
+                  })
+                  .onEnd((e) => {
+                    const shouldClose = e.translationY > 100 || e.velocityY > 700;
+                    if (shouldClose) {
+                      setShowMuscleDetails(false);
+                      return;
+                    }
+                    if (reduceMotion) {
+                      muscleSheetDragY.set(0);
+                    } else {
+                      muscleSheetDragY.set(
+                        withTiming(0, { duration: 200, easing: Easing.out(Easing.quad) }),
+                      );
+                    }
+                  })
+                  .runOnJS(true)}
+              >
+                <Reanimated.View style={[styles.modalSheet, muscleSheetDragStyle]}>
+                  <View style={styles.modalHandle} />
+                  <Text style={styles.modalTitle}>Muscles worked</Text>
+                  <MuscleDetails
+                    muscle={workout[displayedExIndex].primaryMuscle}
+                    emphasis={workout[displayedExIndex].emphasis}
+                  />
+                </Reanimated.View>
+              </GestureDetector>
+            </View>
+          </GestureHandlerRootView>
+        </Modal>
+      )}
 
       {/* Weight input overlay */}
       {weightPhaseForEx !== null && (() => {
@@ -2657,7 +3258,7 @@ export default function WorkoutScreen() {
         };
 
         return (
-          <View style={styles.weightOverlay}>
+          <Reanimated.View style={[styles.weightOverlay, weightScrimStyle]}>
             <KeyboardAvoidingView
               behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
               style={styles.weightOverlayKav}
@@ -2667,7 +3268,7 @@ export default function WorkoutScreen() {
                 keyboardShouldPersistTaps="handled"
                 showsVerticalScrollIndicator={false}
               >
-                <View style={[styles.weightCard, { backgroundColor: colors.surface }]}>
+                <Reanimated.View style={[styles.weightCard, { backgroundColor: colors.surface }, weightSheetStyle]}>
                   <Text style={[styles.weightExTitle, { color: colors.textSecondary }]}>{exName}</Text>
 
               {isBodyweight ? (
@@ -2692,27 +3293,33 @@ export default function WorkoutScreen() {
                     </Text>
                   </View>
 
-                  <TouchableOpacity
+                  <PressableScale
                     style={[styles.weightConfirmBtn, { backgroundColor: colors.accentTeal, marginTop: layout.spacing.md }]}
                     onPress={() => {
+                      // No haptic — same as commitWithRir. The visible
+                      // acknowledgment is the top progress bar easing
+                      // forward + the horizontal exercise glide.
                       // Mark exercise as logged for the completion checkmark.
                       // 'bw' is non-numeric, so finishWorkout's logRows filter
                       // (parseFloat check) skips it for exercise_logs writes.
                       commitWeight(exName, 'bw');
                       setCurrentWeightInput('');
-                      setWeightPhaseForEx(null);
                       if (exIndex < workout.length - 1) {
                         const restSecs = workout[exIndex]?.restSeconds ?? 60;
                         setExIndex(p => p + 1);
+                        // See handleWeightLog: pre-position the reveal
+                        // slide off-screen; hand off to rest with the
+                        // matched fade-in / slide-down pair.
+                        exerciseSlideX.set(EXERCISE_SLIDE_TRAVEL);
+                        exerciseSlideOpacity.set(0);
                         startRest(restSecs);
+                        dismissWeightSheet();
                       } else {
-                        finishWorkout();
+                        dismissWeightSheet(() => finishWorkout());
                       }
-                    }}
-                    activeOpacity={0.8}
-                  >
+                    }}                  >
                     <Text style={[styles.weightConfirmText, { color: colors.background }]}>Done · Continue</Text>
-                  </TouchableOpacity>
+                  </PressableScale>
                 </>
               ) : (
                 // ── Weighted branch: kg input + adjust chips ──
@@ -2741,22 +3348,20 @@ export default function WorkoutScreen() {
 
                   {last !== undefined && (
                     <View style={styles.weightPillRow}>
-                      <TouchableOpacity style={styles.weightPill} onPress={() => setInput(last - 2.5)} activeOpacity={0.7}>
+                      <PressableScale style={styles.weightPill} onPress={() => setInput(last - 2.5)}>
                         <Text style={styles.weightPillText}>-2.5</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
+                      </PressableScale>
+                      <PressableScale
                         style={[styles.weightPill, currentWeightInput === String(last) && styles.weightPillTeal]}
-                        onPress={() => setInput(last)}
-                        activeOpacity={0.7}
-                      >
+                        onPress={() => setInput(last)}                      >
                         <Text style={[styles.weightPillText, currentWeightInput === String(last) && { color: colors.accentTeal }]}>same</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.weightPill} onPress={() => setInput(last + 2.5)} activeOpacity={0.7}>
+                      </PressableScale>
+                      <PressableScale style={styles.weightPill} onPress={() => setInput(last + 2.5)}>
                         <Text style={styles.weightPillText}>+2.5</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.weightPill} onPress={() => setInput(last + 5)} activeOpacity={0.7}>
+                      </PressableScale>
+                      <PressableScale style={styles.weightPill} onPress={() => setInput(last + 5)}>
                         <Text style={styles.weightPillText}>+5</Text>
-                      </TouchableOpacity>
+                      </PressableScale>
                     </View>
                   )}
 
@@ -2805,9 +3410,10 @@ export default function WorkoutScreen() {
                       // border AND text — because the single-tap commit
                       // means a chip is never visually "selected" long
                       // enough to flip into color. The resting state IS
-                      // the colored state. activeOpacity=0.6 gives a brief
-                      // pressed-flash on tap; on commit the popup tears
-                      // down so no extended "selected" look is needed.
+                      // the colored state. PressableScale gives the tap
+                      // its own smooth press-scale (0.96 → 1) on the UI
+                      // thread; on commit the popup tears down so no
+                      // extended "selected" look is needed.
                       // accentPositive (emerald) lives in src/theme/index.ts.
                       { label: 'Failed', sub: '0 left',   rir: 0, color: colors.accentRed      },
                       { label: 'Hard',   sub: '1 left',   rir: 1, color: colors.accentAmber    },
@@ -2815,7 +3421,7 @@ export default function WorkoutScreen() {
                       { label: 'Easy',   sub: '4+ left',  rir: 3, color: colors.accentPositive },
                     ] as const).map(opt => {
                       return (
-                        <TouchableOpacity
+                        <PressableScale
                           key={opt.rir}
                           // Permanent per-chip accent on border. 1.5px so
                           // the color reads clearly against the dark
@@ -2829,9 +3435,7 @@ export default function WorkoutScreen() {
                           onPress={() => commitWithRir(opt.rir)}
                           // Brief flash on press — accent stays, dim
                           // momentarily so the tap is felt without
-                          // requiring a "selected" hold.
-                          activeOpacity={0.6}
-                          accessibilityRole="button"
+                          // requiring a "selected" hold.                          accessibilityRole="button"
                           accessibilityLabel={`${opt.label} — log set with ${opt.sub} in the tank`}
                         >
                           <Text
@@ -2863,76 +3467,119 @@ export default function WorkoutScreen() {
                           >
                             {opt.sub}
                           </Text>
-                        </TouchableOpacity>
+                        </PressableScale>
                       );
                     })}
                   </View>
 
                   {/* Secondary actions. Smaller, separated, deliberate. */}
                   <View style={styles.rirSecondaryRow}>
-                    <TouchableOpacity
+                    <PressableScale
                       onPress={() => commitWithRir(null)}
-                      activeOpacity={0.7}
                       hitSlop={{ top: 8, bottom: 8, left: 12, right: 12 }}
                     >
                       <Text style={[styles.rirSecondaryText, { color: colors.textSecondary }]}>
                         Log without rating
                       </Text>
-                    </TouchableOpacity>
+                    </PressableScale>
                     <Text style={[styles.rirSecondaryDivider, { color: colors.textMuted }]}>·</Text>
-                    <TouchableOpacity
+                    <PressableScale
                       onPress={skipWeightLog}
-                      activeOpacity={0.7}
                       hitSlop={{ top: 8, bottom: 8, left: 12, right: 12 }}
                     >
                       <Text style={[styles.rirSecondaryText, { color: colors.textMuted }]}>
                         Skip this set
                       </Text>
-                    </TouchableOpacity>
+                    </PressableScale>
                   </View>
                 </>
               )}
-                </View>
+                </Reanimated.View>
               </ScrollView>
             </KeyboardAvoidingView>
-          </View>
+          </Reanimated.View>
         );
       })()}
 
       {/* Top bar: abandon button + progress bar */}
       <View style={styles.activeTopBar}>
-        <TouchableOpacity
+        <PressableScale
           onPress={() => setShowAbandonModal(true)}
-          activeOpacity={0.6}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           accessibilityRole="button"
           accessibilityLabel="Abandon workout"
         >
           <Text style={[styles.abandonBtnText, { color: colors.textMuted }]}>✕</Text>
-        </TouchableOpacity>
+        </PressableScale>
         <View style={[styles.progressBar, { backgroundColor: colors.surface }]}>
-          <View style={[styles.progressFill, { width: `${progressPct * 100}%`, backgroundColor: colors.accentTeal }]} />
+          {/* Calm "your effort registered" signal: the fill eases forward
+              on each commit (see the progressWidth effect above). This
+              replaces the earlier scale-beat on the RIR row — visible,
+              purposeful, and always in-frame. */}
+          <Reanimated.View
+            style={[styles.progressFill, { backgroundColor: colors.accentTeal }, progressAnimatedStyle]}
+          />
         </View>
       </View>
 
-      {/* Rest timer — prominent centered card, only rendered while resting.
-          Presentation only: the interval / cleanup logic (startRest /
-          clearRest / functional setRestLeft updater) is untouched. */}
+      {/* Rest state — FULL-SCREEN, opaque. Covers the workout page
+          completely so the next exercise never renders behind it (the
+          displayedExIndex split up top is what keeps the view from
+          flipping forward until the overlay clears). "UP NEXT · <name>"
+          sits above the ring, ring in the middle with countdown at its
+          center, +15s / Skip below. Depletion is linear because 1
+          second must read as 1 second. Overlay fades on skip/expiry
+          (see startRest / skipRest); reduce-motion collapses fade to
+          instant. */}
       {restLeft !== null && (
-        <View style={styles.restTimerOverlay} pointerEvents="box-none">
-          <View style={styles.restTimerCard}>
-            <Text style={styles.restTimerLabelBig}>REST</Text>
-            <Text style={styles.restTimerCountBig}>{formatRest(restLeft)}</Text>
-            <View style={styles.restTimerActionsRow}>
-              <TouchableOpacity style={styles.restTimerBtnBig} onPress={() => addRestTime(15)} activeOpacity={0.7}>
-                <Text style={styles.restTimerBtnTextBig}>+15s</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.restTimerBtnBig} onPress={skipRest} activeOpacity={0.7}>
-                <Text style={styles.restTimerBtnTextBig}>Skip</Text>
-              </TouchableOpacity>
+        <Reanimated.View style={[styles.restTimerOverlay, restOverlayAnimatedStyle]}>
+          <View style={styles.restUpNextBlock}>
+            <Text style={styles.restUpNextKicker}>UP NEXT</Text>
+            <Text style={styles.restUpNextName} numberOfLines={2}>
+              {workout[exIndex]?.name ?? ''}
+            </Text>
+          </View>
+          <View style={styles.restRingWrap}>
+            <Svg
+              width={REST_RING_SIZE}
+              height={REST_RING_SIZE}
+              // Start the arc at 12 o'clock and deplete clockwise.
+              style={{ transform: [{ rotate: '-90deg' }] }}
+            >
+              <Circle
+                cx={REST_RING_SIZE / 2}
+                cy={REST_RING_SIZE / 2}
+                r={REST_RING_RADIUS}
+                stroke={colors.cardBorder}
+                strokeWidth={REST_RING_STROKE}
+                fill="transparent"
+              />
+              <AnimatedCircle
+                cx={REST_RING_SIZE / 2}
+                cy={REST_RING_SIZE / 2}
+                r={REST_RING_RADIUS}
+                stroke={colors.accentTeal}
+                strokeWidth={REST_RING_STROKE}
+                strokeLinecap="round"
+                strokeDasharray={`${REST_RING_CIRCUMFERENCE} ${REST_RING_CIRCUMFERENCE}`}
+                fill="transparent"
+                animatedProps={restRingAnimatedProps}
+              />
+            </Svg>
+            <View style={styles.restRingCenter} pointerEvents="none">
+              <Text style={styles.restRingLabel}>REST</Text>
+              <Text style={styles.restRingCount}>{formatRest(restLeft)}</Text>
             </View>
           </View>
-        </View>
+          <View style={styles.restTimerActionsRow}>
+            <PressableScale style={styles.restTimerBtnBig} onPress={() => addRestTime(15)}>
+              <Text style={styles.restTimerBtnTextBig}>+15s</Text>
+            </PressableScale>
+            <PressableScale style={styles.restTimerBtnBig} onPress={skipRest}>
+              <Text style={styles.restTimerBtnTextBig}>Skip</Text>
+            </PressableScale>
+          </View>
+        </Reanimated.View>
       )}
 
       <ScrollView
@@ -2940,6 +3587,16 @@ export default function WorkoutScreen() {
         contentContainerStyle={{ justifyContent: 'space-between', flexGrow: 1 }}
         showsVerticalScrollIndicator={false}
       >
+        {/* Sliding wrapper — the exercise content (image, title, coach's
+            call, muscle details) glides in from the right + fades in
+            whenever the revealed exercise changes. Horizontal travel
+            reads clearly as "screen moved forward" — the earlier
+            32px vertical fade was invisible on device. See the
+            useEffect on revealed-exercise-changed above (EXERCISE_
+            SLIDE_TRAVEL / _DURATION). The NEXT EXERCISE button + flex
+            spacer stay outside so the ScrollView's justify:space-
+            between layout keeps working. */}
+        <Reanimated.View style={exerciseSlideStyle}>
         {/* Exercise image — STATIC by default (frame 0). The user taps
             the ▶ button overlaid on the photo to animate between the
             catalog's /0.jpg start and /1.jpg end frames, ⏸ to stop.
@@ -2979,13 +3636,12 @@ export default function WorkoutScreen() {
                 onError={() => markImageBroken(uri)}
               />
               {hasSecondFrame ? (
-                <TouchableOpacity
+                <PressableScale
                   style={[
                     styles.exerciseImagePlayBtn,
                     { backgroundColor: colors.surface, borderColor: colors.cardBorder },
                   ]}
                   onPress={() => setFrameLoopPlaying(p => !p)}
-                  activeOpacity={0.7}
                   accessibilityRole="button"
                   accessibilityLabel={
                     frameLoopPlaying ? 'Pause exercise demo' : 'Play exercise demo'
@@ -3004,7 +3660,7 @@ export default function WorkoutScreen() {
                   >
                     {frameLoopPlaying ? '⏸' : '▶'}
                   </Text>
-                </TouchableOpacity>
+                </PressableScale>
               ) : null}
             </View>
           );
@@ -3015,13 +3671,11 @@ export default function WorkoutScreen() {
           <Text style={[styles.activeExName, { color: colors.textPrimary, flex: 1 }]} numberOfLines={2}>
             {currentEx.name}
           </Text>
-          <TouchableOpacity
+          <PressableScale
             style={styles.activeSwapIcon}
-            onPress={openSwapModal}
-            activeOpacity={0.7}
-          >
+            onPress={openSwapModal}          >
             <Text style={styles.activeSwapIconGlyph}>⇄</Text>
-          </TouchableOpacity>
+          </PressableScale>
         </View>
 
         {/* Sets × reps */}
@@ -3162,40 +3816,31 @@ export default function WorkoutScreen() {
         <Text style={[styles.muscleTag, { color: colors.textMuted }]}>{currentEx.primaryMuscle.toUpperCase()}</Text>
 
         {getMuscleInfo(currentEx.primaryMuscle) && (
-          <TouchableOpacity
+          <PressableScale
             style={[styles.detailsBtn, { borderColor: colors.cardBorder }]}
             onPress={() => {
-              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-              setShowMuscleDetails(v => !v);
+              muscleSheetDragY.set(0);
+              setShowMuscleDetails(true);
             }}
-            activeOpacity={0.7}
           >
-            <Text style={[styles.detailsBtnText, { color: colors.accentTeal }]}>
-              {showMuscleDetails ? 'Hide details' : 'Details'}
-            </Text>
-          </TouchableOpacity>
+            <View style={styles.detailsBtnInner}>
+              <Text style={[styles.detailsBtnText, { color: colors.accentTeal }]}>
+                Muscles worked
+              </Text>
+            </View>
+          </PressableScale>
         )}
 
-        {/* Expandable muscle details card */}
-        {showMuscleDetails && getMuscleInfo(currentEx.primaryMuscle) && (
-          <View style={[styles.muscleDetailsCard, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
-            <MuscleDetails
-              muscle={currentEx.primaryMuscle}
-              emphasis={currentEx.emphasis}
-            />
-          </View>
-        )}
+        </Reanimated.View>
 
         <View style={{ flex: 1 }} />
 
         {/* NEXT EXERCISE — full width */}
-        <TouchableOpacity
+        <PressableScale
           style={[styles.nextExBtn, { backgroundColor: colors.accentTeal }]}
-          onPress={handleNextExercise}
-          activeOpacity={0.8}
-        >
+          onPress={handleNextExercise}        >
           <Text style={styles.nextExBtnText}>NEXT EXERCISE</Text>
-        </TouchableOpacity>
+        </PressableScale>
       </ScrollView>
 
       {/* Abandon confirmation modal. Copy and labels come from
@@ -3221,22 +3866,18 @@ export default function WorkoutScreen() {
                   {copy.body}
                 </Text>
                 <View style={styles.abandonActions}>
-                  <TouchableOpacity
+                  <PressableScale
                     style={[styles.abandonCancelBtn, { borderColor: colors.cardBorder }]}
-                    onPress={() => setShowAbandonModal(false)}
-                    activeOpacity={0.7}
-                  >
+                    onPress={() => setShowAbandonModal(false)}                  >
                     <Text style={[styles.abandonCancelText, { color: colors.textPrimary }]}>
                       {copy.cancelLabel}
                     </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
+                  </PressableScale>
+                  <PressableScale
                     style={[styles.abandonConfirmBtn, { backgroundColor: colors.accentRed }]}
-                    onPress={confirmAbandon}
-                    activeOpacity={0.7}
-                  >
+                    onPress={confirmAbandon}                  >
                     <Text style={styles.abandonConfirmText}>{copy.confirmLabel}</Text>
-                  </TouchableOpacity>
+                  </PressableScale>
                 </View>
               </View>
             </View>
@@ -3819,16 +4460,15 @@ function makeStyles(colors: any) {
       borderWidth: 1,
       backgroundColor: colors.surface,
     },
+    detailsBtnInner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+    },
     detailsBtnText: {
       fontFamily: typography.family.bodyMedium,
       fontSize: typography.size.s12,
       letterSpacing: 0.2,
-    },
-    muscleDetailsCard: {
-      marginTop: layout.spacing.md,
-      borderRadius: layout.cardRadius,
-      borderWidth: 1,
-      overflow: 'hidden',
     },
     activeTitleRow: {
       flexDirection: 'row',
@@ -3895,27 +4535,70 @@ function makeStyles(colors: any) {
       fontSize: typography.size.s12,
       color: colors.textSecondary,
     },
-    // ── Centered rest-timer overlay ─────────────────────────────────
+    // ── Full-screen opaque rest state ────────────────────────────────
+    // Fully covers the workout page so the next exercise never renders
+    // behind the ring. The displayedExIndex split at the top of the
+    // component is what keeps the exercise view from flipping forward
+    // during rest; this opaque background is what makes that split
+    // invisible to the user.
     restTimerOverlay: {
       position: 'absolute',
       top: 0,
       left: 0,
       right: 0,
       bottom: 0,
-      backgroundColor: colors.scrimMedium,
+      backgroundColor: colors.background,
       alignItems: 'center',
       justifyContent: 'center',
+      gap: layout.spacing.xl,
+      paddingHorizontal: layout.spacing.xl,
       zIndex: 90,
     },
-    restTimerCard: {
-      backgroundColor: colors.surface,
-      borderWidth: 1,
-      borderColor: colors.cardBorder,
-      borderRadius: layout.cardRadius,
-      paddingVertical: layout.spacing.xl,
-      paddingHorizontal: layout.spacing.xl,
+    restUpNextBlock: {
       alignItems: 'center',
-      minWidth: 220,
+      gap: layout.spacing.xs,
+    },
+    restUpNextKicker: {
+      fontFamily: typography.family.bodyMedium,
+      fontSize: typography.size.s11,
+      letterSpacing: 3,
+      color: colors.textMuted,
+    },
+    restUpNextName: {
+      fontFamily: typography.family.heading,
+      fontSize: typography.size.s22,
+      color: colors.textPrimary,
+      letterSpacing: -0.2,
+      textAlign: 'center',
+    },
+    restRingWrap: {
+      width: REST_RING_SIZE,
+      height: REST_RING_SIZE,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    restRingCenter: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    restRingLabel: {
+      fontFamily: typography.family.bodyMedium,
+      fontSize: typography.size.s12,
+      letterSpacing: 3,
+      color: colors.textMuted,
+      marginBottom: layout.spacing.xs,
+    },
+    restRingCount: {
+      fontFamily: typography.family.heading,
+      fontSize: typography.size.s64,
+      lineHeight: 68,
+      color: colors.accentTeal,
+      letterSpacing: 1,
     },
     restTimerLabelBig: {
       fontFamily: typography.family.bodyMedium,
@@ -4273,61 +4956,72 @@ function makeStyles(colors: any) {
       color: colors.textMuted,
       marginTop: 2,
     },
-    prCard: {
+    // ── Personal-best compact list (complete screen) ──────────────────
+    // One container card holds every PR row so multiple bests read as a
+    // list (sibling to the lift-summary list on the same screen), not a
+    // stack of heavy cards. Accent gold is preserved as (a) the section
+    // label, (b) a small dot marker per row, and (c) the weight hero on
+    // the right. Header carries the "new best" idea, so per-row tag is
+    // gone; no delta.
+    prLineList: {
+      marginTop: layout.spacing.md,
+      paddingHorizontal: layout.spacing.md,
+    },
+    prSectionLabel: {
+      fontFamily: typography.family.bodyMedium,
+      fontSize: typography.size.s11,
+      letterSpacing: 2,
+      color: colors.accentGoldDeep,
+      marginBottom: layout.spacing.sm,
+    },
+    prContainer: {
       backgroundColor: colors.surface,
       borderRadius: layout.cardRadius,
       borderWidth: 1,
-      borderColor: colors.accentAmber + '55',
-      padding: 16,
+      borderColor: colors.cardBorder,
       overflow: 'hidden',
-      position: 'relative',
-    },
-    prCornerGlow: {
-      position: 'absolute',
-      top: -40,
-      right: -40,
-      width: 120,
-      height: 120,
-      borderRadius: layout.radii.r60,
-      backgroundColor: colors.accentAmber + '22',
-    },
-    prLabel: {
-      fontFamily: typography.family.bodyMedium,
-      fontSize: typography.size.s9_5,
-      letterSpacing: 2,
-      color: colors.accentAmber,
-      marginBottom: 6,
     },
     prRow: {
       flexDirection: 'row',
-      alignItems: 'baseline',
-      justifyContent: 'space-between',
-      gap: 12,
+      alignItems: 'center',
+      gap: layout.spacing.sm,
+      paddingVertical: 10,
+      paddingHorizontal: layout.spacing.md,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.cardBorder,
     },
-    prName: {
-      fontFamily: typography.family.heading,
-      fontSize: typography.size.s19,
-      letterSpacing: -0.4,
-      color: colors.textPrimary,
+    prRowLast: {
+      borderBottomWidth: 0,
+    },
+    prDot: {
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+      backgroundColor: colors.accentGoldDeep,
+    },
+    prRowName: {
       flex: 1,
-    },
-    prWeight: {
-      fontFamily: typography.family.heading,
-      fontSize: typography.size.s22,
-      letterSpacing: -0.5,
+      fontFamily: typography.family.bodyMedium,
+      fontSize: typography.size.s14,
       color: colors.textPrimary,
+      letterSpacing: -0.1,
     },
-    prWeightUnit: {
+    prRowWeightWrap: {
+      flexDirection: 'row',
+      alignItems: 'baseline',
+      gap: 3,
+    },
+    prRowWeight: {
+      fontFamily: typography.family.heading,
+      fontSize: typography.size.s16,
+      color: colors.accentGold,
+      fontVariant: ['tabular-nums'],
+    },
+    prRowWeightUnit: {
       fontFamily: typography.family.body,
       fontSize: typography.size.s11,
-      color: colors.textSecondary,
-    },
-    prDelta: {
-      fontFamily: typography.family.bodyMedium,
-      fontSize: typography.size.s10_5,
+      color: colors.accentGoldDeep,
       letterSpacing: 0.4,
-      color: colors.accentAmber,
-      marginTop: 4,
     },
     exerciseSummaryRow: {
       flexDirection: 'row',
