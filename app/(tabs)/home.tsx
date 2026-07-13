@@ -8,8 +8,10 @@ import {
   Modal,
   Platform,
   ScrollView,
+  StyleProp,
   StyleSheet,
   Text,
+  TextStyle,
   TouchableOpacity,
   UIManager,
   View
@@ -22,7 +24,7 @@ import WeekStrip from '../../src/components/WeekStrip';
 import { get30DayPlan, type ForwardDay } from '../../src/utils/monthCalendar';
 import { useTheme } from '../../src/context/ThemeContext';
 import { supabase } from '../../src/lib/supabase';
-import { layout, typography } from '../../src/theme';
+import { animation, layout, typography } from '../../src/theme';
 import { detectReturnGap } from '../../src/utils/gapDetection';
 import {
   countUnfinishedPastTrainingDays,
@@ -96,6 +98,14 @@ import {
   computeStrengthTrend,
   type StrengthTrend,
 } from '../../src/utils/dashboardStats';
+import RAnimated, {
+  interpolateColor,
+  useAnimatedStyle,
+  useSharedValue,
+  withSequence,
+  withSpring,
+} from 'react-native-reanimated';
+import { MOTION } from '../../src/components/motion/motion';
 
 // Pager index of the Coach sub-tab. Hardcoded to avoid a circular import
 // from TabLayout (which already imports this screen). Kept in sync with
@@ -212,6 +222,79 @@ const PulseDot = ({ color }: { color: string }) => {
   );
 };
 
+// PulseDot + big score + band label with a spring color/scale transition
+// when Training Status changes (🟢 recovering_well → 🟡 holding_steady →
+// 🔴 backing_off). interpolateColor drives the color tween, withSequence
+// gives the score a subtle scale beat, both governed by
+// animation.spring.gentle. The score number itself is rendered as
+// plain animated Text — the earlier count-up wrapper (AnimatedCount)
+// had a flash-to-0 bug on refocus/remount and offered no signal
+// numeric users actually needed, so it was removed.
+type TrainingStatusIndicatorProps = {
+  color: string;
+  score: number;
+  label: string;
+  scoreStyle: StyleProp<TextStyle>;
+  labelStyle: StyleProp<TextStyle>;
+};
+
+function TrainingStatusIndicator({
+  color,
+  score,
+  label,
+  scoreStyle,
+  labelStyle,
+}: TrainingStatusIndicatorProps) {
+  // Everything reactive lives in shared values so the effect never calls
+  // setState (which would trip react-hooks/set-state-in-effect under the
+  // React 19 Compiler ruleset). Reanimated re-runs useAnimatedStyle when
+  // any read shared value changes, so updating prev/current colors from
+  // the effect propagates into the color/scale interpolations.
+  const prevColor = useSharedValue(color);
+  const currentColor = useSharedValue(color);
+  const progress = useSharedValue(1);
+  const scale = useSharedValue(1);
+
+  useEffect(() => {
+    if (color !== currentColor.get()) {
+      prevColor.set(currentColor.get());
+      currentColor.set(color);
+      progress.set(0);
+      progress.set(withSpring(1, animation.spring.gentle));
+      scale.set(
+        withSequence(
+          withSpring(1.05, animation.spring.gentle),
+          withSpring(1, animation.spring.gentle),
+        ),
+      );
+    }
+  }, [color, currentColor, prevColor, progress, scale]);
+
+  const scaleStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.get() }],
+  }));
+
+  const colorStyle = useAnimatedStyle(() => ({
+    color: interpolateColor(
+      progress.get(),
+      [0, 1],
+      [prevColor.get(), currentColor.get()],
+    ),
+  }));
+
+  return (
+    <>
+      <PulseDot color={color} />
+      <RAnimated.View style={scaleStyle}>
+        <RAnimated.Text style={[scoreStyle, colorStyle]}>{score}</RAnimated.Text>
+      </RAnimated.View>
+      <RAnimated.Text style={[labelStyle, colorStyle]} numberOfLines={2}>
+        {label}
+      </RAnimated.Text>
+    </>
+  );
+}
+
 export default function HomeScreen() {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
@@ -260,6 +343,14 @@ export default function HomeScreen() {
   // re-focus without a new unseen observation does NOT re-play the entrance.
   const coachEntranceProgress = useRef(new Animated.Value(1)).current;
   const lastAnimatedUnseenIdRef = useRef<string | null>(null);
+  // Whether the dashboard has ever completed a fetch this mount. The
+  // very first load flips `loading` on so the skeleton state shows;
+  // every SUBSEQUENT fetch (useFocusEffect refetch, post-deload refetches,
+  // etc.) refreshes data IN PLACE without swapping the cards to
+  // skeletons — the existing numbers stay on screen and just update
+  // to their new values. Ref (not state) so flipping it doesn't
+  // itself schedule a re-render.
+  const hasLoadedOnce = useRef(false);
   useEffect(() => {
     // latestUnseen scans newest-first; the dedupKey on the message is
     // independent of the id, so id is the right entrance key (a re-loaded
@@ -329,7 +420,13 @@ export default function HomeScreen() {
   );
 
   const fetchDashboardData = async () => {
-    setLoading(true);
+    // Only enter the skeleton state on the FIRST load. Every
+    // subsequent refetch (focus, deload accept, plan resume) refreshes
+    // data behind the scenes so the visible numbers don't flash to 0
+    // or re-skeleton when the user interacts with the dashboard.
+    if (!hasLoadedOnce.current) {
+      setLoading(true);
+    }
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -1015,7 +1112,28 @@ export default function HomeScreen() {
               ratedSets: effortZoneResult?.total ?? 0,
               rirMissSets: Math.max(0, (effortZoneResult?.total ?? 0) - (effortZoneResult?.hits ?? 0)),
             });
-            setTrainingStatus(status);
+            // Don't downgrade a good score to null on a transient/degraded
+            // refresh (partial reads, empty log slices during focus). If
+            // we previously had a real numeric score and this pass came
+            // back with score=null, keep the last-good status — otherwise
+            // the number visibly flickers 80 → Building → 80 across a
+            // refocus. Only the very first-load "no data yet" state (prev
+            // score already null) actually surfaces the null status.
+            setTrainingStatus(prev => {
+              if (status.score == null && prev?.score != null) {
+                reportSilent(
+                  new Error('trainingStatus degraded-read kept prev'),
+                  'home:trainingStatus:degradedRead',
+                  {
+                    hadStrengthTrend: (strengthTrendResult?.perLift?.length ?? 0) > 0,
+                    tsSessionsLen: tsSessions.length,
+                    distinctIn14: distinctIn14.size,
+                  },
+                );
+                return prev;
+              }
+              return status;
+            });
 
             // Deload countdown for the explain copy + the offer decision.
             // deloadStart = weekStart + (4 − blockWeek)·7; days until then.
@@ -1262,6 +1380,9 @@ export default function HomeScreen() {
       // Dashboard fetch failed silently — user can retry by switching tabs
     } finally {
       setLoading(false);
+      // Flip after the FIRST load resolves (success or error). From
+      // here on, refetches update in place without a skeleton.
+      hasLoadedOnce.current = true;
     }
   };
 
@@ -2236,83 +2357,114 @@ export default function HomeScreen() {
                 0–100 score + band label, with the measured reason alongside.
 
               Only shown with an active plan to read. */}
-          {!loading && trainingStatus && calibration && !calibration.unlocked ? (
-            <View style={styles.recoveryCard}>
-              <View style={styles.recoveryRow}>
-                <View style={styles.recoveryLeft}>
-                  <PulseDot color={colors.accentTeal} />
-                  <Text style={[styles.recoveryScore, styles.recoveryScoreBuilding]} numberOfLines={1} adjustsFontSizeToFit>
-                    Calibrating
-                  </Text>
-                  <Text style={[styles.recoveryBandLabel, { color: colors.textMuted }]} numberOfLines={2}>
-                    {calibration.remaining === 1
-                      ? '1 SESSION TO GO'
-                      : `${calibration.remaining} SESSIONS TO GO`}
-                  </Text>
-                </View>
+          {!loading && trainingStatus ? (
+            <RAnimated.View entering={MOTION.enter(0)} style={styles.recoveryCard}>
+              {calibration && !calibration.unlocked ? (
+                <View style={styles.recoveryRow}>
+                  <View style={styles.recoveryLeft}>
+                    <PulseDot color={colors.accentTeal} />
+                    <Text style={[styles.recoveryScore, styles.recoveryScoreBuilding]} numberOfLines={1} adjustsFontSizeToFit>
+                      Calibrating
+                    </Text>
+                    <Text style={[styles.recoveryBandLabel, { color: colors.textMuted }]} numberOfLines={2}>
+                      {calibration.remaining === 1
+                        ? '1 SESSION TO GO'
+                        : `${calibration.remaining} SESSIONS TO GO`}
+                    </Text>
+                  </View>
 
-                <View style={styles.recoveryRight}>
-                  <Text style={styles.recoveryKicker}>RECOVERY</Text>
-                  <Text style={styles.recoveryReason}>
-                    {calibration.remaining === 1
-                      ? 'Your coach is calibrating — 1 session to go before it reads your recovery.'
-                      : `Your coach is calibrating — ${calibration.remaining} sessions to go before it reads your recovery.`}
-                  </Text>
-                  {/* Progress toward the unlock — fills as real logged sessions
-                      accrue (1/3 → 2/3 → full). Reaches 100% on the exact focus
-                      the gauge takes over. */}
-                  <View style={styles.calibrationTrack}>
-                    <View
-                      style={[
-                        styles.calibrationFill,
-                        {
-                          width: `${Math.round(
-                            (calibration.sessionsLogged / Math.max(1, calibration.sessionsNeeded)) * 100,
-                          )}%`,
-                        },
-                      ]}
-                    />
+                  <View style={styles.recoveryRight}>
+                    <Text style={styles.recoveryKicker}>RECOVERY</Text>
+                    <Text style={styles.recoveryReason}>
+                      {calibration.remaining === 1
+                        ? 'Your coach is calibrating — 1 session to go before it reads your recovery.'
+                        : `Your coach is calibrating — ${calibration.remaining} sessions to go before it reads your recovery.`}
+                    </Text>
+                    {/* Progress toward the unlock — fills as real logged sessions
+                        accrue (1/3 → 2/3 → full). Reaches 100% on the exact focus
+                        the gauge takes over. */}
+                    <View style={styles.calibrationTrack}>
+                      <View
+                        style={[
+                          styles.calibrationFill,
+                          {
+                            width: `${Math.round(
+                              (calibration.sessionsLogged / Math.max(1, calibration.sessionsNeeded)) * 100,
+                            )}%`,
+                          },
+                        ]}
+                      />
+                    </View>
                   </View>
                 </View>
-              </View>
-            </View>
-          ) : !loading && trainingStatus ? (
-            <View style={styles.recoveryCard}>
-              <View style={styles.recoveryRow}>
-                <View style={styles.recoveryLeft}>
-                  <PulseDot color={statusView.color} />
-                  <Text style={[styles.recoveryScore, { color: statusView.color }]} numberOfLines={1} adjustsFontSizeToFit>
-                    {trainingStatus.score}
-                  </Text>
-                  <Text style={[styles.recoveryBandLabel, { color: statusView.color }]} numberOfLines={2}>
-                    {statusView.label}
-                  </Text>
-                </View>
+              ) : (
+                <>
+                  <View style={styles.recoveryRow}>
+                    <View style={styles.recoveryLeft}>
+                      {/* score is number | null. calibration.unlocked being
+                          true doesn't guarantee a numeric score on this
+                          render — a transient/degraded refresh can leave
+                          the two signals inconsistent (unlocked from
+                          history, score null from a partial read). Never
+                          coerce null to 0: the big number would silently
+                          read as "0", which the user experienced as the
+                          score "dropping". Fall back to the same
+                          building visual the locked/calibrating branch
+                          uses. */}
+                      {typeof trainingStatus.score === 'number' && Number.isFinite(trainingStatus.score) ? (
+                        <TrainingStatusIndicator
+                          color={statusView.color}
+                          score={trainingStatus.score}
+                          label={statusView.label}
+                          scoreStyle={styles.recoveryScore}
+                          labelStyle={styles.recoveryBandLabel}
+                        />
+                      ) : (
+                        <>
+                          <PulseDot color={colors.textMuted} />
+                          <Text
+                            style={[styles.recoveryScore, styles.recoveryScoreBuilding]}
+                            numberOfLines={1}
+                            adjustsFontSizeToFit
+                          >
+                            Building
+                          </Text>
+                          <Text
+                            style={[styles.recoveryBandLabel, { color: colors.textMuted }]}
+                            numberOfLines={2}
+                          >
+                            {statusView.label}
+                          </Text>
+                        </>
+                      )}
+                    </View>
 
-                <View style={styles.recoveryRight}>
-                  <Text style={styles.recoveryKicker}>RECOVERY</Text>
-                  <Text style={styles.recoveryReason}>{statusReason}</Text>
-                </View>
-              </View>
+                    <View style={styles.recoveryRight}>
+                      <Text style={styles.recoveryKicker}>RECOVERY</Text>
+                      <Text style={styles.recoveryReason}>{statusReason}</Text>
+                    </View>
+                  </View>
 
-              {deloadOffer === 'early' && (
-                <Button
-                  title="Deload early?"
-                  onPress={() => applyDeloadAction('early')}
-                  loading={deloadActionLoading}
-                  style={{ marginTop: layout.spacing.md }}
-                />
+                  {deloadOffer === 'early' && (
+                    <Button
+                      title="Deload early?"
+                      onPress={() => applyDeloadAction('early')}
+                      loading={deloadActionLoading}
+                      style={{ marginTop: layout.spacing.md }}
+                    />
+                  )}
+                  {deloadOffer === 'skip' && (
+                    <Button
+                      title="Skip deload, keep pushing?"
+                      variant="ghost"
+                      onPress={() => applyDeloadAction('skip')}
+                      disabled={deloadActionLoading}
+                      style={{ marginTop: layout.spacing.md }}
+                    />
+                  )}
+                </>
               )}
-              {deloadOffer === 'skip' && (
-                <Button
-                  title="Skip deload, keep pushing?"
-                  variant="ghost"
-                  onPress={() => applyDeloadAction('skip')}
-                  disabled={deloadActionLoading}
-                  style={{ marginTop: layout.spacing.md }}
-                />
-              )}
-            </View>
+            </RAnimated.View>
           ) : null}
 
           {/* EARLY WIN — a small, honest reassurance during the calibration
@@ -2334,16 +2486,27 @@ export default function HomeScreen() {
               fetched in fetchDashboardData) with the raw count as context.
               Honest "—"/"Building" empties — never a misleading "0%". */}
           {!loading && (
+            <RAnimated.View entering={MOTION.enter(1)}>
             <Surface style={styles.momentumCard}>
               <View style={styles.momentumHalf}>
                 <Text style={styles.momentumKicker}>CONSISTENCY</Text>
-                <Text
-                  style={[styles.momentumValue, { color: streakColor }]}
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                >
-                  {streak.current > 0 ? `${streak.current}` : '—'}
-                </Text>
+                {streak.current > 0 ? (
+                  <Text
+                    style={[styles.momentumValue, { color: streakColor }]}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                  >
+                    {streak.current}
+                  </Text>
+                ) : (
+                  <Text
+                    style={[styles.momentumValue, { color: streakColor }]}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                  >
+                    —
+                  </Text>
+                )}
                 <Text style={styles.momentumLabel}>
                   {streak.current > 0 ? 'day streak' : 'no streak yet'}
                 </Text>
@@ -2370,11 +2533,12 @@ export default function HomeScreen() {
                 </Text>
               </View>
             </Surface>
+            </RAnimated.View>
           )}
 
           {/* WEEK PROGRESS — tap to expand the full plan */}
           {!loading && plan && plan.days_planned > 0 && (
-            <View style={styles.weekRow}>
+            <RAnimated.View entering={MOTION.enter(2)} style={styles.weekRow}>
               <TouchableOpacity
                 style={styles.weekRowHeader}
                 onPress={toggleWeek}
@@ -2447,7 +2611,7 @@ export default function HomeScreen() {
                   })}
                 </View>
               ) : null}
-            </View>
+            </RAnimated.View>
           )}
 
           {/* 7-DAY STRIP */}
