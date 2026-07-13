@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  AccessibilityInfo,
   Alert,
   KeyboardAvoidingView,
   Platform,
@@ -13,7 +14,16 @@ import {
   View,
 } from 'react-native';
 import PagerView from 'react-native-pager-view';
+import Reanimated, {
+  Easing,
+  FadeInDown,
+  interpolateColor,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import PressableScale from '../src/components/motion/PressableScale';
 import { useTheme } from '../src/context/ThemeContext';
 import { supabase } from '../src/lib/supabase';
 import { track } from '../src/lib/analytics';
@@ -86,11 +96,16 @@ const LEVELS: { value: FitnessLevel; label: string; hint: string }[] = [
 // Plain labels + a one-line description each. The user's pick is authoritative
 // — it's saved as preferred_split and drives generation (the generator no
 // longer derives the split from the day count).
+//
+// DISPLAY ORDER ONLY. bro_split leads because it's the most popular pick;
+// splitForDays / the recommended-split guardrail key off the `value`, not
+// array position, so this ordering does not affect defaults or the
+// mismatch-prompt logic.
 const SPLIT_OPTIONS: { value: SplitId; label: string; desc: string }[] = [
+  { value: 'bro_split', label: 'Bro Split', desc: 'One body-part per day — chest, back, shoulders, arms, legs.' },
   { value: 'full_body', label: 'Full Body', desc: 'Every session trains your whole body.' },
   { value: 'upper_lower', label: 'Upper / Lower', desc: 'Alternate upper-body and lower-body days.' },
   { value: 'ppl', label: 'Push / Pull / Legs', desc: 'Push, pull, and legs each get their own day.' },
-  { value: 'bro_split', label: 'Bro Split', desc: 'One body-part per day — chest, back, shoulders, arms, legs.' },
 ];
 
 // Goal — one of three. Required (the only new field that blocks submit).
@@ -146,6 +161,138 @@ const emptyAnchorInputs = (): Record<AnchorLiftKey, { weight: string; reps: stri
   row: { weight: '', reps: '' },
 });
 
+// One segment of the 3-part progress bar. Grows its teal fill from 0 to
+// 100% width when it becomes the active step, and dims (opacity 0.5)
+// when it becomes "done" — so momentum reads as fill+deepen, not a
+// hard color flip. Reduce-motion instantly matches the target.
+function ProgressSegment({
+  index,
+  step,
+  reduceMotion,
+  styles,
+}: {
+  index: number;
+  step: number;
+  reduceMotion: boolean;
+  styles: any;
+}) {
+  const targetFill = index <= step ? 1 : 0;
+  const targetOpacity = index < step ? 0.5 : index === step ? 1 : 0;
+  const fill = useSharedValue(targetFill);
+  const op = useSharedValue(targetOpacity);
+
+  useEffect(() => {
+    const nextFill = index <= step ? 1 : 0;
+    const nextOpacity = index < step ? 0.5 : index === step ? 1 : 0;
+    if (reduceMotion) {
+      fill.set(nextFill);
+      op.set(nextOpacity);
+    } else {
+      fill.set(withTiming(nextFill, { duration: 320, easing: Easing.out(Easing.quad) }));
+      op.set(withTiming(nextOpacity, { duration: 320, easing: Easing.out(Easing.quad) }));
+    }
+  }, [step, index, reduceMotion, fill, op]);
+
+  const fillStyle = useAnimatedStyle(() => ({
+    width: `${fill.get() * 100}%`,
+    opacity: op.get(),
+  }));
+
+  return (
+    <View style={styles.progressSegment}>
+      <Reanimated.View style={[styles.progressSegmentFill, fillStyle]} />
+    </View>
+  );
+}
+
+// Selectable option that animates border + background from an inactive
+// (surface / cardBorder) rest to an active (surfaceElevated / accentTeal)
+// state via a single shared progress. Also renders a top-right check
+// badge that scales+fades in when selected — clean scale, ease-out, no
+// bounce. `showCheck` defaults to true; pass false for small controls
+// (e.g. the 7-across weekday squares) where a corner badge would crowd
+// the letter and the fill+color-flip is already a strong enough signal.
+// Wrapped in PressableScale so the press feel is consistent with the
+// rest of the app. Reduce-motion snaps to the target.
+//
+// LAYOUT NOTE: the passed `style` is applied to the PressableScale
+// wrapper (which is the actual flex child of the parent row/column).
+// An earlier version applied it to an inner Reanimated.View, which
+// meant `flex: 1`, `aspectRatio: 1`, `maxWidth: N` all lived one level
+// too deep — the wrapper collapsed to intrinsic content size, and
+// `borderRadius: 12` on a 24px letter-box rendered as a circle. The
+// wrapper is Reanimated-compatible (createAnimatedComponent(Pressable)
+// inside PressableScale) so the animated bg + border colors compose
+// cleanly onto the same view via style arrays — no inner fill view
+// required.
+function AnimatedSelectable({
+  selected,
+  reduceMotion,
+  onPress,
+  disabled,
+  style,
+  baseBackground,
+  activeBackground,
+  baseBorder,
+  activeBorder,
+  accessibilityLabel,
+  accessibilityState,
+  showCheck = true,
+  styles,
+  children,
+}: {
+  selected: boolean;
+  reduceMotion: boolean;
+  onPress: () => void;
+  disabled?: boolean;
+  style: any;
+  baseBackground: string;
+  activeBackground: string;
+  baseBorder: string;
+  activeBorder: string;
+  accessibilityLabel?: string;
+  accessibilityState?: any;
+  showCheck?: boolean;
+  styles: any;
+  children: React.ReactNode;
+}) {
+  const t = useSharedValue(selected ? 1 : 0);
+  useEffect(() => {
+    if (reduceMotion) {
+      t.set(selected ? 1 : 0);
+    } else {
+      t.set(withTiming(selected ? 1 : 0, { duration: 180, easing: Easing.out(Easing.quad) }));
+    }
+  }, [selected, reduceMotion, t]);
+
+  const surfaceStyle = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(t.get(), [0, 1], [baseBackground, activeBackground]),
+    borderColor: interpolateColor(t.get(), [0, 1], [baseBorder, activeBorder]),
+  }));
+
+  const checkStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: t.get() }],
+    opacity: t.get(),
+  }));
+
+  return (
+    <PressableScale
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityState={accessibilityState}
+      style={[style, surfaceStyle]}
+    >
+      {children}
+      {showCheck ? (
+        <Reanimated.View style={[styles.checkBadge, checkStyle]} pointerEvents="none">
+          <Text style={styles.checkBadgeText}>✓</Text>
+        </Reanimated.View>
+      ) : null}
+    </PressableScale>
+  );
+}
+
 export default function OnboardingScreen() {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
@@ -189,6 +336,39 @@ export default function OnboardingScreen() {
   // Back/Next taps.
   const [step, setStep] = useState<0 | 1 | 2>(0);
   const pagerRef = useRef<PagerView>(null);
+
+  // Per-page activation counters. react-native-pager-view PRE-MOUNTS all
+  // three pages, so a plain mount-time `entering` fires while pages 1 and
+  // 2 are offscreen and the user lands on a static page. Solution: re-key
+  // the page content on activation — bumping the seq unmounts+remounts
+  // the sub-tree, which re-fires every child's `entering`. Page 0 starts
+  // at seq 1 so its initial mount serves as its entrance (the user is
+  // already looking at it); pages 1 and 2 start at 0 and bump on the
+  // first activation. Guarded on pos !== step so an initial-mount
+  // onPageSelected(0) can't double-fire page 0.
+  const [activationSeqs, setActivationSeqs] = useState<[number, number, number]>([1, 0, 0]);
+
+  // OS reduce-motion. Selection still works and progress still fills;
+  // the animations just collapse to instant.
+  const [reduceMotion, setReduceMotion] = useState(false);
+  useEffect(() => {
+    let mounted = true;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then(v => { if (mounted) setReduceMotion(v); })
+      .catch(() => { /* default false is fine */ });
+    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', v => {
+      setReduceMotion(v);
+    });
+    return () => { mounted = false; sub.remove(); };
+  }, []);
+
+  // Calm entrance stagger for a page's logical groups. Fade + short
+  // rise, ease-out (no spring / no bounce). Reduce-motion drops the
+  // entering prop so the group appears instantly.
+  const preEnter = (i: number) =>
+    reduceMotion
+      ? undefined
+      : FadeInDown.delay(i * 70).duration(320).easing(Easing.out(Easing.quad));
 
   // Parse the bodyweight text input. Decimal-tolerant (the field accepts a
   // comma OR a dot — easier for EU users). Anything outside the plausible
@@ -471,13 +651,12 @@ export default function OnboardingScreen() {
           <Text style={styles.brand}>INTR</Text>
           <View style={styles.progressRow} accessibilityLabel={`Step ${step + 1} of ${TOTAL_STEPS}`}>
             {Array.from({ length: TOTAL_STEPS }).map((_, i) => (
-              <View
+              <ProgressSegment
                 key={i}
-                style={[
-                  styles.progressPill,
-                  i === step && styles.progressPillActive,
-                  i < step && styles.progressPillDone,
-                ]}
+                index={i}
+                step={step}
+                reduceMotion={reduceMotion}
+                styles={styles}
               />
             ))}
           </View>
@@ -487,189 +666,271 @@ export default function OnboardingScreen() {
           ref={pagerRef}
           style={{ flex: 1 }}
           initialPage={0}
-          onPageSelected={e => setStep(e.nativeEvent.position as 0 | 1 | 2)}
+          onPageSelected={e => {
+            const pos = e.nativeEvent.position as 0 | 1 | 2;
+            if (pos === step) return;
+            setStep(pos);
+            // Bump this page's activation counter so its re-keyed wrapper
+            // remounts and every child `entering` re-fires — the stagger
+            // plays when the user actually lands on the page, not while
+            // the pager pre-mounted it offscreen.
+            setActivationSeqs(prev => {
+              const next: [number, number, number] = [prev[0], prev[1], prev[2]];
+              next[pos] = prev[pos] + 1;
+              return next;
+            });
+          }}
           // Preserve scroll behavior on native swipe; disabling swipe would
           // add a gate the pre-paged layout didn't have.
         >
           {/* ── Step 1: training schedule (level + weekdays + split) ── */}
           <View key="step-1" style={styles.page}>
-            <ScrollView
-              contentContainerStyle={styles.scrollContent}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-            >
-              <Text style={styles.intro}>
-                Three answers. Your first workout is ready in seconds.
-              </Text>
+            {/* Re-keyed on activation so the pre-mounted-offscreen entrance
+                fires WHEN the user lands on this page, not silently while
+                the pager pre-mounted it. See activationSeqs comment above. */}
+            <View key={`page-0-seq-${activationSeqs[0]}`} style={{ flex: 1 }}>
+              <ScrollView
+                contentContainerStyle={styles.scrollContent}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <Reanimated.View entering={preEnter(0)}>
+                  <Text style={styles.intro}>
+                    Three answers. Your first workout is ready in seconds.
+                  </Text>
+                </Reanimated.View>
 
-              {/* Fitness level */}
-              <Text style={styles.label}>How long have you trained?</Text>
-              <View style={styles.levelRow}>
-                {LEVELS.map(opt => {
-                  const selected = level === opt.value;
-                  return (
-                    <TouchableOpacity
-                      key={opt.value}
-                      style={[styles.levelChip, selected && styles.levelChipActive]}
-                      onPress={() => setLevel(opt.value)}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={[styles.levelLabel, selected && styles.levelLabelActive]}>{opt.label}</Text>
-                      <Text style={[styles.levelHint, selected && styles.levelHintActive]}>{opt.hint}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+                {/* Fitness level */}
+                <Reanimated.View entering={preEnter(1)}>
+                  <Text style={styles.label}>How long have you trained?</Text>
+                  <View style={styles.levelRow}>
+                    {LEVELS.map(opt => {
+                      const selected = level === opt.value;
+                      return (
+                        <AnimatedSelectable
+                          key={opt.value}
+                          selected={selected}
+                          reduceMotion={reduceMotion}
+                          onPress={() => setLevel(opt.value)}
+                          style={styles.levelChip}
+                          baseBackground={colors.surface}
+                          activeBackground={colors.surfaceElevated}
+                          baseBorder={colors.cardBorder}
+                          activeBorder={colors.accentTeal}
+                          styles={styles}
+                        >
+                          <Text style={[styles.levelLabel, selected && styles.levelLabelActive]}>{opt.label}</Text>
+                          <Text style={[styles.levelHint, selected && styles.levelHintActive]}>{opt.hint}</Text>
+                        </AnimatedSelectable>
+                      );
+                    })}
+                  </View>
+                </Reanimated.View>
 
-              {/* Weekday picker. The number of selected weekdays IS the
-                  training-days count — splitForDays(days) uses the same count. */}
-              <Text style={[styles.label, { marginTop: layout.spacing.xl }]}>Which days can you train?</Text>
-              <View style={styles.daysRow}>
-                {WEEKDAY_LAYOUT.map(opt => {
-                  const selected = weekdays.includes(opt.value);
-                  const atCap = !selected && weekdays.length >= MAX_WEEKDAYS;
-                  return (
-                    <TouchableOpacity
-                      key={opt.value}
-                      style={[
-                        styles.dayPill,
-                        selected && styles.dayPillActive,
-                        atCap && { opacity: 0.4 },
-                      ]}
-                      onPress={() => toggleWeekday(opt.value)}
-                      disabled={atCap}
-                      activeOpacity={0.8}
-                      accessibilityLabel={`Toggle ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][opt.value]}`}
-                      accessibilityState={{ selected }}
-                    >
-                      <Text style={[styles.dayText, selected && styles.dayTextActive]}>{opt.label}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-              <Text style={styles.deferNote}>
-                {weekdays.length === 0
-                  ? `Pick ${MIN_WEEKDAYS}–${MAX_WEEKDAYS} days.`
-                  : weekdays.length < MIN_WEEKDAYS
-                    ? `Pick ${MIN_WEEKDAYS - weekdays.length} more — at least ${MIN_WEEKDAYS} days a week.`
-                    : `${weekdays.length} day${weekdays.length === 1 ? '' : 's'} a week.`}
-              </Text>
-              {clusteredNote && (
-                <Text style={[styles.deferNote, { color: colors.accentAmber }]}>
-                  {clusteredNote}
-                </Text>
-              )}
+                {/* Weekday picker. The number of selected weekdays IS the
+                    training-days count — splitForDays(days) uses the same count. */}
+                <Reanimated.View entering={preEnter(2)}>
+                  <Text style={[styles.label, { marginTop: layout.spacing.xl }]}>Which days can you train?</Text>
+                  <View style={styles.daysRow}>
+                    {WEEKDAY_LAYOUT.map(opt => {
+                      const selected = weekdays.includes(opt.value);
+                      const atCap = !selected && weekdays.length >= MAX_WEEKDAYS;
+                      return (
+                        <AnimatedSelectable
+                          key={opt.value}
+                          selected={selected}
+                          reduceMotion={reduceMotion}
+                          onPress={() => toggleWeekday(opt.value)}
+                          disabled={atCap}
+                          style={[styles.dayPill, atCap && { opacity: 0.4 }]}
+                          baseBackground={colors.surface}
+                          // Selected day squares fill SOLID teal (was
+                          // surfaceElevated, which read as barely-selected
+                          // on the small target); the letter switches to
+                          // colors.background for a knocked-out dark
+                          // contrast on the bright fill.
+                          activeBackground={colors.accentTeal}
+                          baseBorder={colors.cardBorder}
+                          activeBorder={colors.accentTeal}
+                          // No corner check on the small 7-across day
+                          // squares — the solid teal fill + knocked-out
+                          // letter is unambiguous, and a badge would
+                          // crowd the single-letter target.
+                          showCheck={false}
+                          accessibilityLabel={`Toggle ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][opt.value]}`}
+                          accessibilityState={{ selected }}
+                          styles={styles}
+                        >
+                          <Text style={[styles.dayText, selected && styles.dayTextActive]}>{opt.label}</Text>
+                        </AnimatedSelectable>
+                      );
+                    })}
+                  </View>
+                  <Text style={styles.deferNote}>
+                    {weekdays.length === 0
+                      ? `Pick ${MIN_WEEKDAYS}–${MAX_WEEKDAYS} days.`
+                      : weekdays.length < MIN_WEEKDAYS
+                        ? `Pick ${MIN_WEEKDAYS - weekdays.length} more — at least ${MIN_WEEKDAYS} days a week.`
+                        : `${weekdays.length} day${weekdays.length === 1 ? '' : 's'} a week.`}
+                  </Text>
+                  {clusteredNote && (
+                    <Text style={[styles.deferNote, { color: colors.accentAmber }]}>
+                      {clusteredNote}
+                    </Text>
+                  )}
+                </Reanimated.View>
 
-              {/* Workout split */}
-              <Text style={[styles.label, { marginTop: layout.spacing.xl }]}>Which split do you want?</Text>
-              <View style={styles.splitList}>
-                {SPLIT_OPTIONS.map(opt => {
-                  const selected = split === opt.value;
-                  return (
-                    <TouchableOpacity
-                      key={opt.value}
-                      style={[styles.splitCard, selected && styles.splitCardActive]}
-                      onPress={() => { setSplit(opt.value); setSplitTouched(true); }}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={[styles.splitLabel, selected && styles.splitLabelActive]}>{opt.label}</Text>
-                      <Text style={[styles.splitDesc, selected && styles.splitDescActive]}>{opt.desc}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </ScrollView>
+                {/* Workout split — full-width stacked cards. Shares the
+                    unified optionCard styling with goal and location. */}
+                <Reanimated.View entering={preEnter(3)}>
+                  <Text style={[styles.label, { marginTop: layout.spacing.xl }]}>Which split do you want?</Text>
+                  <View style={styles.optionStack}>
+                    {SPLIT_OPTIONS.map(opt => {
+                      const selected = split === opt.value;
+                      return (
+                        <AnimatedSelectable
+                          key={opt.value}
+                          selected={selected}
+                          reduceMotion={reduceMotion}
+                          onPress={() => { setSplit(opt.value); setSplitTouched(true); }}
+                          style={styles.optionCard}
+                          baseBackground={colors.surface}
+                          activeBackground={colors.surfaceElevated}
+                          baseBorder={colors.cardBorder}
+                          activeBorder={colors.accentTeal}
+                          styles={styles}
+                        >
+                          <Text style={[styles.optionLabel, selected && styles.optionLabelActive]}>{opt.label}</Text>
+                          <Text style={[styles.optionDesc, selected && styles.optionDescActive]}>{opt.desc}</Text>
+                        </AnimatedSelectable>
+                      );
+                    })}
+                  </View>
+                </Reanimated.View>
+              </ScrollView>
+            </View>
           </View>
 
           {/* ── Step 2: goal + where you train + optional body inputs ── */}
           <View key="step-2" style={styles.page}>
-            <ScrollView
-              contentContainerStyle={styles.scrollContent}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-            >
-              {/* Goal — required. Drives the cold-start coach rationale ("built
-                  around getting your bench moving") and later, volume biasing. */}
-              <Text style={styles.label}>What are you here for?</Text>
-              <View style={styles.levelRow}>
-                {GOAL_OPTIONS.map(opt => {
-                  const selected = goal === opt.value;
-                  return (
-                    <TouchableOpacity
-                      key={opt.value}
-                      style={[styles.levelChip, selected && styles.levelChipActive]}
-                      onPress={() => setGoal(opt.value)}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={[styles.levelLabel, selected && styles.levelLabelActive]}>{opt.label}</Text>
-                      <Text style={[styles.levelHint, selected && styles.levelHintActive]} numberOfLines={1}>{opt.desc}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+            <View key={`page-1-seq-${activationSeqs[1]}`} style={{ flex: 1 }}>
+              <ScrollView
+                contentContainerStyle={styles.scrollContent}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                {/* Goal — required. Drives the cold-start coach rationale ("built
+                    around getting your bench moving") and later, volume biasing.
+                    Full-width stacked cards (was a cramped 3-up row where
+                    the descriptions clipped) — same unified card as split. */}
+                <Reanimated.View entering={preEnter(0)}>
+                  <Text style={styles.label}>What are you here for?</Text>
+                  <View style={styles.optionStack}>
+                    {GOAL_OPTIONS.map(opt => {
+                      const selected = goal === opt.value;
+                      return (
+                        <AnimatedSelectable
+                          key={opt.value}
+                          selected={selected}
+                          reduceMotion={reduceMotion}
+                          onPress={() => setGoal(opt.value)}
+                          style={styles.optionCard}
+                          baseBackground={colors.surface}
+                          activeBackground={colors.surfaceElevated}
+                          baseBorder={colors.cardBorder}
+                          activeBorder={colors.accentTeal}
+                          styles={styles}
+                        >
+                          <Text style={[styles.optionLabel, selected && styles.optionLabelActive]}>{opt.label}</Text>
+                          <Text style={[styles.optionDesc, selected && styles.optionDescActive]}>{opt.desc}</Text>
+                        </AnimatedSelectable>
+                      );
+                    })}
+                  </View>
+                </Reanimated.View>
 
-              {/* Where you train — sets user:defaultLocation, which the
-                  exercise pool reads at plan-gen time. Always has a value
-                  (defaults to Gym); not part of isValid because a sensible
-                  default already covers a skip-equivalent tap-through. */}
-              <Text style={[styles.label, { marginTop: layout.spacing.xl }]}>Where do you train?</Text>
-              <View style={styles.levelRow}>
-                {LOCATION_OPTIONS.map(opt => {
-                  const selected = location === opt.value;
-                  return (
-                    <TouchableOpacity
-                      key={opt.value}
-                      style={[styles.levelChip, selected && styles.levelChipActive]}
-                      onPress={() => setLocation(opt.value)}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={[styles.levelLabel, selected && styles.levelLabelActive]}>{opt.label}</Text>
-                      <Text style={[styles.levelHint, selected && styles.levelHintActive]} numberOfLines={1}>{opt.hint}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+                {/* Where you train — sets user:defaultLocation, which the
+                    exercise pool reads at plan-gen time. Always has a value
+                    (defaults to Gym); not part of isValid because a sensible
+                    default already covers a skip-equivalent tap-through.
+                    Binary choice → 2-column grid using the same unified
+                    optionCard as goal and split (flex:1 per card at the
+                    call site). */}
+                <Reanimated.View entering={preEnter(1)}>
+                  <Text style={[styles.label, { marginTop: layout.spacing.xl }]}>Where do you train?</Text>
+                  <View style={styles.optionRow2}>
+                    {LOCATION_OPTIONS.map(opt => {
+                      const selected = location === opt.value;
+                      return (
+                        <AnimatedSelectable
+                          key={opt.value}
+                          selected={selected}
+                          reduceMotion={reduceMotion}
+                          onPress={() => setLocation(opt.value)}
+                          style={[styles.optionCard, { flex: 1 }]}
+                          baseBackground={colors.surface}
+                          activeBackground={colors.surfaceElevated}
+                          baseBorder={colors.cardBorder}
+                          activeBorder={colors.accentTeal}
+                          styles={styles}
+                        >
+                          <Text style={[styles.optionLabel, selected && styles.optionLabelActive]}>{opt.label}</Text>
+                          <Text style={[styles.optionDesc, selected && styles.optionDescActive]}>{opt.hint}</Text>
+                        </AnimatedSelectable>
+                      );
+                    })}
+                  </View>
+                </Reanimated.View>
 
-              {/* Bodyweight + sex — both optional. Framed functionally so the
-                  user knows WHY we're asking; skipping is fine and just means
-                  session 1 stays a calibration entry instead of a seeded one. */}
-              <Text style={[styles.label, { marginTop: layout.spacing.xl }]}>
-                Bodyweight (optional)
-              </Text>
-              <Text style={styles.helperNote}>
-                Lets us seed sensible starting weights. Skip and session one becomes a quick calibration set.
-              </Text>
-              <View style={styles.bodyRow}>
-                <View style={styles.bodyInputWrap}>
-                  <TextInput
-                    style={styles.bodyInput}
-                    value={bodyweightInput}
-                    onChangeText={setBodyweightInput}
-                    placeholder="—"
-                    placeholderTextColor={colors.textMuted}
-                    keyboardType="decimal-pad"
-                    maxLength={6}
-                    accessibilityLabel="Bodyweight in kilograms"
-                  />
-                  <Text style={styles.bodyUnit}>kg</Text>
-                </View>
-                <View style={styles.sexRow}>
-                  {SEX_OPTIONS.map(opt => {
-                    const selected = sex === opt.value;
-                    return (
-                      <TouchableOpacity
-                        key={opt.value}
-                        style={[styles.sexChip, selected && styles.sexChipActive]}
-                        onPress={() => setSex(prev => (prev === opt.value ? null : opt.value))}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={[styles.sexChipText, selected && styles.sexChipTextActive]}>{opt.label}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              </View>
-            </ScrollView>
+                {/* Bodyweight + sex — both optional. Framed functionally so the
+                    user knows WHY we're asking; skipping is fine and just means
+                    session 1 stays a calibration entry instead of a seeded one. */}
+                <Reanimated.View entering={preEnter(2)}>
+                  <Text style={[styles.label, { marginTop: layout.spacing.xl }]}>
+                    Bodyweight (optional)
+                  </Text>
+                  <Text style={styles.helperNote}>
+                    Lets us seed sensible starting weights. Skip and session one becomes a quick calibration set.
+                  </Text>
+                  <View style={styles.bodyRow}>
+                    <View style={styles.bodyInputWrap}>
+                      <TextInput
+                        style={styles.bodyInput}
+                        value={bodyweightInput}
+                        onChangeText={setBodyweightInput}
+                        placeholder="—"
+                        placeholderTextColor={colors.textMuted}
+                        keyboardType="decimal-pad"
+                        maxLength={6}
+                        accessibilityLabel="Bodyweight in kilograms"
+                      />
+                      <Text style={styles.bodyUnit}>kg</Text>
+                    </View>
+                    <View style={styles.sexRow}>
+                      {SEX_OPTIONS.map(opt => {
+                        const selected = sex === opt.value;
+                        return (
+                          <AnimatedSelectable
+                            key={opt.value}
+                            selected={selected}
+                            reduceMotion={reduceMotion}
+                            onPress={() => setSex(prev => (prev === opt.value ? null : opt.value))}
+                            style={styles.sexChip}
+                            baseBackground={colors.surface}
+                            activeBackground={colors.surfaceElevated}
+                            baseBorder={colors.cardBorder}
+                            activeBorder={colors.accentTeal}
+                            styles={styles}
+                          >
+                            <Text style={[styles.sexChipText, selected && styles.sexChipTextActive]}>{opt.label}</Text>
+                          </AnimatedSelectable>
+                        );
+                      })}
+                    </View>
+                  </View>
+                </Reanimated.View>
+              </ScrollView>
+            </View>
           </View>
 
           {/* ── Step 3: anchor-lift numbers (fully optional) + Start training ──
@@ -684,92 +945,102 @@ export default function OnboardingScreen() {
               "Start training" here and missingHint/errorMsg surface below
               the anchor rows. */}
           <View key="step-3" style={styles.page}>
-            <ScrollView
-              contentContainerStyle={styles.scrollContent}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-            >
-              <Text style={styles.label}>
-                What are you lifting these days? (optional)
-              </Text>
-              <Text style={styles.helperNote}>
-                A recent set for any of these — makes your first session accurate. Skip any (or all) you don&apos;t know.
-              </Text>
-
-              <View style={styles.anchorHeaderRow}>
-                <Text style={[styles.anchorHeaderCell, { flex: 1.4 }]} />
-                <Text style={styles.anchorHeaderCell}>kg</Text>
-                <Text style={styles.anchorHeaderCell}>reps</Text>
-              </View>
-              {ANCHOR_LIFTS.map(def => (
-                <View key={def.key} style={styles.anchorRow}>
-                  <Text style={styles.anchorLabel} numberOfLines={1}>{def.label}</Text>
-                  <TextInput
-                    style={styles.anchorInput}
-                    value={anchorInputs[def.key].weight}
-                    onChangeText={v => setAnchorField(def.key, 'weight', v)}
-                    placeholder="—"
-                    placeholderTextColor={colors.textMuted}
-                    keyboardType="decimal-pad"
-                    maxLength={6}
-                    accessibilityLabel={`${def.label} weight in kilograms`}
-                  />
-                  <TextInput
-                    style={styles.anchorInput}
-                    value={anchorInputs[def.key].reps}
-                    onChangeText={v => setAnchorField(def.key, 'reps', v)}
-                    placeholder="—"
-                    placeholderTextColor={colors.textMuted}
-                    keyboardType="number-pad"
-                    maxLength={2}
-                    accessibilityLabel={`${def.label} reps`}
-                  />
-                </View>
-              ))}
-
-              {/* Explicit skip affordance — functionally identical to
-                  leaving every row blank and tapping Next, but "Skip" as
-                  a first-class choice matters more here than on the other
-                  optional steps: this one has ten empty boxes staring
-                  back, and a lifter who doesn't know their numbers off
-                  the top of their head should feel invited to move on,
-                  not stuck. */}
-              <TouchableOpacity
-                onPress={goNext}
-                activeOpacity={0.7}
-                style={styles.anchorSkipLink}
-                accessibilityLabel="Skip this step"
+            <View key={`page-2-seq-${activationSeqs[2]}`} style={{ flex: 1 }}>
+              <ScrollView
+                contentContainerStyle={styles.scrollContent}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
               >
-                <Text style={styles.anchorSkipLinkText}>Skip — I&apos;ll figure it out as I go</Text>
-              </TouchableOpacity>
+                <Reanimated.View entering={preEnter(0)}>
+                  <Text style={styles.label}>
+                    What are you lifting these days? (optional)
+                  </Text>
+                  <Text style={styles.helperNote}>
+                    A recent set for any of these — makes your first session accurate. Skip any (or all) you don&apos;t know.
+                  </Text>
+                </Reanimated.View>
 
-              {/* Import placeholder — the real importer (Strong, Hevy, etc.)
-                  isn't built yet. Rather than a dead tap, it's honest about
-                  that: a visually secondary button (outline, not filled —
-                  Start training stays the one primary action on this page)
-                  that opens a "coming soon" notice. */}
-              <TouchableOpacity
-                onPress={() => Alert.alert(
-                  'Coming soon',
-                  'Import from Strong, Hevy and others — coming soon.',
-                )}
-                activeOpacity={0.7}
-                style={styles.importBtn}
-                accessibilityLabel="Import from another app"
-              >
-                <Text style={styles.importBtnText}>Import from another app</Text>
-              </TouchableOpacity>
+                <Reanimated.View entering={preEnter(1)}>
+                  <View style={styles.anchorHeaderRow}>
+                    <Text style={[styles.anchorHeaderCell, { flex: 1.4 }]} />
+                    <Text style={styles.anchorHeaderCell}>kg</Text>
+                    <Text style={styles.anchorHeaderCell}>reps</Text>
+                  </View>
+                  {ANCHOR_LIFTS.map(def => (
+                    <View key={def.key} style={styles.anchorRow}>
+                      <Text style={styles.anchorLabel} numberOfLines={1}>{def.label}</Text>
+                      <TextInput
+                        style={styles.anchorInput}
+                        value={anchorInputs[def.key].weight}
+                        onChangeText={v => setAnchorField(def.key, 'weight', v)}
+                        placeholder="—"
+                        placeholderTextColor={colors.textMuted}
+                        keyboardType="decimal-pad"
+                        maxLength={6}
+                        accessibilityLabel={`${def.label} weight in kilograms`}
+                      />
+                      <TextInput
+                        style={styles.anchorInput}
+                        value={anchorInputs[def.key].reps}
+                        onChangeText={v => setAnchorField(def.key, 'reps', v)}
+                        placeholder="—"
+                        placeholderTextColor={colors.textMuted}
+                        keyboardType="number-pad"
+                        maxLength={2}
+                        accessibilityLabel={`${def.label} reps`}
+                      />
+                    </View>
+                  ))}
+                </Reanimated.View>
 
-              {/* Hint when the Start-training button is disabled — points
-                  the user back to the earlier step(s) that still need
-                  filling. Non-blocking: they swipe back themselves. */}
-              {(() => {
-                const hint = missingHint();
-                return hint ? <Text style={styles.missingHint}>{hint}</Text> : null;
-              })()}
+                <Reanimated.View entering={preEnter(2)}>
+                  {/* Explicit skip affordance — functionally identical to
+                      leaving every row blank and tapping Next, but "Skip" as
+                      a first-class choice matters more here than on the other
+                      optional steps: this one has ten empty boxes staring
+                      back, and a lifter who doesn't know their numbers off
+                      the top of their head should feel invited to move on,
+                      not stuck. */}
+                  <TouchableOpacity
+                    onPress={goNext}
+                    activeOpacity={0.7}
+                    style={styles.anchorSkipLink}
+                    accessibilityLabel="Skip this step"
+                  >
+                    <Text style={styles.anchorSkipLinkText}>Skip — I&apos;ll figure it out as I go</Text>
+                  </TouchableOpacity>
 
-              {errorMsg ? <Text style={styles.errorText}>{errorMsg}</Text> : null}
-            </ScrollView>
+                  {/* Import placeholder — the real importer (Strong, Hevy, etc.)
+                      isn't built yet. Rather than a dead tap, it's honest about
+                      that: a visually secondary button (outline, not filled —
+                      Start training stays the one primary action on this page)
+                      that opens a "coming soon" notice. */}
+                  <TouchableOpacity
+                    onPress={() => Alert.alert(
+                      'Coming soon',
+                      'Import from Strong, Hevy and others — coming soon.',
+                    )}
+                    activeOpacity={0.7}
+                    style={styles.importBtn}
+                    accessibilityLabel="Import from another app"
+                  >
+                    <Text style={styles.importBtnText}>Import from another app</Text>
+                  </TouchableOpacity>
+                </Reanimated.View>
+
+                <Reanimated.View entering={preEnter(3)}>
+                  {/* Hint when the Start-training button is disabled — points
+                      the user back to the earlier step(s) that still need
+                      filling. Non-blocking: they swipe back themselves. */}
+                  {(() => {
+                    const hint = missingHint();
+                    return hint ? <Text style={styles.missingHint}>{hint}</Text> : null;
+                  })()}
+
+                  {errorMsg ? <Text style={styles.errorText}>{errorMsg}</Text> : null}
+                </Reanimated.View>
+              </ScrollView>
+            </View>
           </View>
         </PagerView>
 
@@ -831,25 +1102,47 @@ const makeStyles = (colors: any) => StyleSheet.create({
     textAlign: 'center',
     marginBottom: layout.spacing.md,
   },
-  // 3-pill progress indicator. Active step gets the teal fill; earlier
-  // (done) steps get a subtler fill so the user reads them as complete
-  // vs. current at a glance.
+  // 3-segment progress bar. Each segment is a track with an animated
+  // teal fill: it grows from 0 → 100% width when the segment becomes
+  // active, and dims to 0.5 opacity when it becomes "done" — so
+  // momentum reads as fill + deepen, not a hard color flip. Segments
+  // after the current one keep opacity 0. Driven by ProgressSegment
+  // withTiming on step change.
   progressRow: {
     flexDirection: 'row',
     gap: 8,
   },
-  progressPill: {
+  progressSegment: {
     width: 34,
     height: 4,
     borderRadius: layout.pillRadius,
     backgroundColor: colors.surfaceElevated,
+    overflow: 'hidden',
   },
-  progressPillActive: {
+  progressSegmentFill: {
+    height: '100%',
     backgroundColor: colors.accentTeal,
+    borderRadius: layout.pillRadius,
   },
-  progressPillDone: {
+  // Corner check badge for AnimatedSelectable — scales+fades in when
+  // the option is selected. Absolute-positioned so it sits over the
+  // top-right corner without shifting the option's own content layout.
+  checkBadge: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
     backgroundColor: colors.accentTeal,
-    opacity: 0.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkBadgeText: {
+    fontFamily: typography.family.bodyMedium,
+    fontSize: 9,
+    lineHeight: 10,
+    color: colors.background,
   },
   page: {
     flex: 1,
@@ -857,7 +1150,10 @@ const makeStyles = (colors: any) => StyleSheet.create({
   scrollContent: {
     paddingHorizontal: layout.spacing.lg,
     paddingTop: layout.spacing.md,
-    paddingBottom: layout.spacing.xxl,
+    // Clear the fixed footer (button ~52 + top pad 16 + bottom pad 24-32
+    // ≈ 92-100px) so the last option in a page never sits under BACK/NEXT.
+    // Add a small buffer above that so the option isn't kissing the border.
+    paddingBottom: 128,
   },
   intro: {
     fontFamily: typography.family.body,
@@ -915,31 +1211,52 @@ const makeStyles = (colors: any) => StyleSheet.create({
     gap: 8,
   },
   dayPill: {
+    // Rounded-square day toggle. flex:1 splits the row evenly across 7,
+    // aspectRatio:1 forces height = width so each is a true square, and
+    // maxWidth caps them from stretching wide on tablets / wide phones.
+    // On a typical ~343px content width with gap:8, each square lands
+    // at ~40 × 40; on wider surfaces they clamp at 44 × 44.
     flex: 1,
-    height: 56,
-    borderRadius: layout.cardRadius,
-    borderWidth: 1,
+    aspectRatio: 1,
+    maxWidth: 44,
+    borderRadius: 12,
+    borderWidth: 1.5,
     borderColor: colors.cardBorder,
     backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  dayPillActive: {
-    borderColor: colors.accentTeal,
-    backgroundColor: colors.surfaceElevated,
-  },
   dayText: {
-    fontFamily: typography.family.heading,
-    fontSize: typography.size.lg,
-    color: colors.textPrimary,
+    // Unselected: light regular-weight letter in muted color — reads
+    // as a quiet outlined square. bodyMedium + background color takes
+    // over on select, giving the "medium weight when selected" contrast
+    // called for in the design; the accentTeal fill supplies the pop.
+    fontFamily: typography.family.body,
+    fontSize: typography.size.md,
+    color: colors.textMuted,
   },
   dayTextActive: {
-    color: colors.accentTeal,
+    fontFamily: typography.family.bodyMedium,
+    // Knocked-out dark on the bright teal fill — high contrast, legible.
+    color: colors.background,
   },
-  splitList: {
+  // ── Unified option card (goal, split, location) ────────────────────
+  // ONE shape used across every descriptive selectable in onboarding so
+  // padding, radius, border, and check-badge placement stay consistent
+  // regardless of layout mode. Containers decide width: optionStack
+  // (vertical list) makes each card full-width; optionRow2 puts two
+  // cards side-by-side (each wrapped with flex:1 at the call site).
+  // Text colors on the label/desc still hard-flip on select — the
+  // dominant animated signal is the border+background transition from
+  // AnimatedSelectable, which reads as the same beat.
+  optionStack: {
     gap: 8,
   },
-  splitCard: {
+  optionRow2: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  optionCard: {
     paddingVertical: 14,
     paddingHorizontal: layout.spacing.md,
     borderRadius: layout.cardRadius,
@@ -947,26 +1264,22 @@ const makeStyles = (colors: any) => StyleSheet.create({
     borderColor: colors.cardBorder,
     backgroundColor: colors.surface,
   },
-  splitCardActive: {
-    borderColor: colors.accentTeal,
-    backgroundColor: colors.surfaceElevated,
-  },
-  splitLabel: {
+  optionLabel: {
     fontFamily: typography.family.bodyMedium,
     fontSize: typography.size.md,
     color: colors.textPrimary,
   },
-  splitLabelActive: {
+  optionLabelActive: {
     color: colors.accentTeal,
   },
-  splitDesc: {
+  optionDesc: {
     fontFamily: typography.family.body,
     fontSize: typography.size.s12,
     color: colors.textMuted,
     marginTop: 3,
     lineHeight: 16,
   },
-  splitDescActive: {
+  optionDescActive: {
     color: colors.textSecondary,
   },
   deferNote: {
