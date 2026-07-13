@@ -244,10 +244,22 @@ export const text = deepFreeze({
 // ─── Animation ─────────────────────────────────
 //
 // `easing.*` are 4-tuples of cubic-bezier control points. Consumers spread
-// them into RN's `Easing.bezier(...)` at the call site (and Reanimated's
-// equivalent), e.g.
-//   import { Easing } from 'react-native';
+// them into `Easing.bezier(...)` at the call site — but note the two
+// worlds have different Easings:
+//   • Legacy Animated (react-native's `Easing`) runs on the JS thread.
+//   • Reanimated (`react-native-reanimated`'s `Easing`) runs on the UI
+//     thread as a WORKLET. `withTiming`/`withSpring`/`withDecay` require
+//     the worklet variant; passing RN's Easing crashes at runtime with
+//     "The easing function is not a worklet".
+//
+// Example (Reanimated — the common case for new motion):
+//   import { Easing } from 'react-native-reanimated';
 //   Easing.bezier(...animation.easing.standard)
+//
+// The same worklet rule applies to any callback you pass through
+// useAnimatedProps / useAnimatedStyle — format functions, interpolators,
+// etc. must all be worklets, never JS-thread functions.
+//
 // This indirection keeps the theme module side-effect-free so non-React
 // code paths (and Jest) can import it without pulling in react-native.
 //
@@ -298,6 +310,11 @@ export type IntrColors = {
                               // (e.g. RIR "Easy" chip; reps left in the tank)
   accentRest: string;         // Rest / recovery / backing-off — calm indigo,
                               // deliberately NOT red. Red stays destructive-only.
+  accentGold: string;         // Matte gold — PR celebration text (weight hero).
+                              // Distinct from accentAmber (progression/ratios
+                              // signal); reserved for "PERSONAL BEST" surfaces.
+  accentGoldDeep: string;     // Deeper gold — PR left-accent bar + NEW BEST tag.
+                              // Reads as an inscribed brass mark on dark.
 
   // Tactical grid & inputs
   border: string;             // Hard mechanical grid lines
@@ -345,6 +362,9 @@ const PALETTE: IntrColors = {
   accentRed: '#EF4444',      // Sharp red — destructive / missed
   accentPositive: '#10B981', // Emerald — RIR Easy chip, "you had more in the tank"
   accentRest: '#818CF8',     // Calm indigo — rest / recovery / backing-off (NOT red)
+  accentGold: '#E9C46A',     // Matte gold — PR weight hero. Tuned for #070708 canvas:
+                             // warm enough to read as gold, not so saturated it screams.
+  accentGoldDeep: '#C9A94A', // Deeper gold — PR left-accent bar + NEW BEST tag.
 
   // Grid & inputs
   border: '#22262A',

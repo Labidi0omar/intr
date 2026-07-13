@@ -13,7 +13,6 @@ import Animated, {
   withSpring,
 } from 'react-native-reanimated';
 import { animation } from '../../theme';
-import * as haptics from '../../lib/haptics';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -22,22 +21,19 @@ const RELEASED_SCALE = 1;
 
 type Props = Omit<PressableProps, 'style'> & {
   style?: StyleProp<ViewStyle>;
-  /** Optional haptic fired on pressIn — same moment the finger lands. */
-  haptic?: 'tap' | 'select';
   children: React.ReactNode;
 };
 
 /**
  * Pressable that springs its own scale down on press and back on
- * release. Optional haptic fires on pressIn (not release) — same
- * moment the user feels contact.
+ * release. VISUAL only — no haptic. The whole app has moved off
+ * vibration; the press-scale is the entire tactile signal now.
  *
  * Respects reduce-motion: if the OS reports it enabled, the scale
- * animation is skipped. Haptic and onPress still fire.
+ * animation is skipped and onPress still fires.
  */
 export default function PressableScale({
   style,
-  haptic,
   onPressIn,
   onPressOut,
   onPress,
@@ -75,11 +71,9 @@ export default function PressableScale({
       if (!reduceMotion) {
         scale.set(withSpring(PRESSED_SCALE, animation.spring.press));
       }
-      if (haptic === 'tap') haptics.tap();
-      else if (haptic === 'select') haptics.select();
       onPressIn?.(e);
     },
-    [haptic, onPressIn, reduceMotion, scale],
+    [onPressIn, reduceMotion, scale],
   );
 
   const handlePressOut = useCallback(

@@ -1,12 +1,19 @@
-import React from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Text,
-  StyleSheet,
+  AccessibilityInfo,
   ActivityIndicator,
+  GestureResponderEvent,
   Pressable,
+  StyleSheet,
+  Text,
 } from 'react-native';
-import { layout, typography } from '../theme';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+} from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
+import { animation, layout, typography } from '../theme';
 
 type ButtonVariant = 'primary' | 'secondary' | 'ghost';
 
@@ -19,6 +26,20 @@ interface ButtonProps {
   style?: any;
 }
 
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+const PRESSED_SCALE = 0.96;
+const RELEASED_SCALE = 1;
+
+/**
+ * Shared button primitive. Every use site of <Button /> — every
+ * primary/secondary/ghost CTA in the app — automatically press-scales
+ * on touch: a smooth spring shrinks to 0.96 on press-in, springs back
+ * on release. VISUAL only, no haptic. Reduce-motion skips the scale.
+ * The scale replaces the earlier pressed-state background flash — a
+ * single, physical, consistent affordance instead of a color hint that
+ * only kicked in on the secondary/ghost variants.
+ */
 export default function Button({
   title,
   onPress,
@@ -28,6 +49,49 @@ export default function Button({
   style,
 }: ButtonProps) {
   const { colors } = useTheme();
+
+  const scale = useSharedValue(RELEASED_SCALE);
+  const [reduceMotion, setReduceMotion] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then(v => {
+        if (mounted) setReduceMotion(v);
+      })
+      .catch(() => {
+        // Default (false) is already in state; nothing to do.
+      });
+    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', v => {
+      setReduceMotion(v);
+    });
+    return () => {
+      mounted = false;
+      sub.remove();
+    };
+  }, []);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.get() }],
+  }));
+
+  const handlePressIn = useCallback(
+    (_e: GestureResponderEvent) => {
+      if (!reduceMotion) {
+        scale.set(withSpring(PRESSED_SCALE, animation.spring.press));
+      }
+    },
+    [reduceMotion, scale],
+  );
+
+  const handlePressOut = useCallback(
+    (_e: GestureResponderEvent) => {
+      if (!reduceMotion) {
+        scale.set(withSpring(RELEASED_SCALE, animation.spring.press));
+      }
+    },
+    [reduceMotion, scale],
+  );
 
   const getContainerStyle = () => {
     const base = { backgroundColor: 'transparent', borderWidth: 1 };
@@ -50,17 +114,17 @@ export default function Button({
   };
 
   return (
-    <Pressable
-      style={({ pressed }) => [
+    <AnimatedPressable
+      style={[
+        animatedStyle,
         styles.container,
         ...getContainerStyle(),
-        pressed && variant === 'primary' && { opacity: 0.85 },
-        pressed && variant === 'secondary' && { backgroundColor: colors.surfaceElevated },
-        pressed && variant === 'ghost' && { backgroundColor: colors.surfaceElevated },
         (disabled || loading) && { opacity: 0.35 },
         style,
       ]}
       onPress={onPress}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
       disabled={disabled || loading}
     >
       {loading ? (
@@ -71,7 +135,7 @@ export default function Button({
       ) : (
         <Text style={[styles.text, getTextStyle()]}>{title}</Text>
       )}
-    </Pressable>
+    </AnimatedPressable>
   );
 }
 
