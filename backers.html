@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Intr — Contributors</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#070708;
+    --panel:#0f0f11;
+    --border:#1e1e22;
+    --text:#f5f5f6;
+    --muted:#7c7c85;
+    --faint:#4a4a52;
+    --teal:#2dd4bf;
+    --coral:#fb7185;
+    --amber:#fbbf24;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--text);font-family:'DM Sans',system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;min-height:100vh;overflow-x:hidden;position:relative}
+
+  /* ambient glow */
+  body::before{content:"";position:fixed;top:-320px;left:50%;transform:translateX(-50%);
+    width:900px;height:640px;pointer-events:none;z-index:0;
+    background:radial-gradient(closest-side, rgba(45,212,191,.13), rgba(251,113,133,.05) 55%, transparent 75%);
+    filter:blur(20px)}
+  /* vignette */
+  body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+    background:radial-gradient(120% 90% at 50% 0%, transparent 60%, rgba(0,0,0,.5))}
+
+  .wrap{position:relative;z-index:1;width:100%;max-width:820px;margin:0 auto;padding:72px 24px 110px}
+  @media (max-width:600px){ .wrap{padding:48px 20px 80px} }
+
+  a{color:var(--teal);text-decoration:none}
+  a:hover{text-decoration:underline}
+
+  .brand{display:flex;justify-content:center;margin-bottom:34px}
+  .logo{font-family:'Syne',sans-serif;font-weight:800;font-size:20px;letter-spacing:3px;
+    padding:9px 16px;border-radius:12px;border:1px solid var(--border);
+    background:linear-gradient(180deg,#141416,#0d0d0f)}
+
+  .eyebrow{text-align:center;font-family:'Syne',sans-serif;font-weight:600;font-size:12px;
+    letter-spacing:4px;text-transform:uppercase;color:var(--teal);margin-bottom:20px}
+  .tag{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(34px,7vw,60px);
+    text-align:center;line-height:1.05;letter-spacing:-1px;margin-bottom:26px}
+  .lead{color:#c4c4cc;text-align:center;font-size:clamp(16px,4vw,18px);line-height:1.85;max-width:500px;margin:0 auto 26px}
+  @media (max-width:600px){
+    .eyebrow{letter-spacing:3px}
+    .lead{font-size:16px;line-height:1.8}
+  }
+
+  .count{display:flex;align-items:baseline;justify-content:center;gap:10px;margin-bottom:80px}
+  .count .n{font-family:'Syne',sans-serif;font-weight:800;font-size:26px;
+    background:linear-gradient(180deg,#fff,#a7a7ae);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .count .l{color:var(--muted);font-size:13px;letter-spacing:2px;text-transform:uppercase}
+
+  /* tiers */
+  .tier{margin-bottom:60px;opacity:0;transform:translateY(14px);animation:rise .7s ease forwards}
+  .tier:nth-child(1){animation-delay:.05s}
+  .tier:nth-child(2){animation-delay:.15s}
+  .tier:nth-child(3){animation-delay:.25s}
+  @keyframes rise{to{opacity:1;transform:none}}
+
+  .tier-head{display:flex;align-items:center;gap:12px;margin-bottom:26px}
+  .dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+  .t-amber .dot{background:var(--amber);box-shadow:0 0 12px rgba(251,191,36,.5)}
+  .t-coral .dot{background:var(--coral);box-shadow:0 0 12px rgba(251,113,133,.5)}
+  .t-teal  .dot{background:var(--teal); box-shadow:0 0 12px rgba(45,212,191,.5)}
+  .tier-name{font-family:'Syne',sans-serif;font-weight:700;font-size:14px;letter-spacing:1.5px;text-transform:uppercase}
+  .t-amber .tier-name{color:var(--amber)} .t-coral .tier-name{color:var(--coral)} .t-teal .tier-name{color:var(--teal)}
+  .tier-badge{margin-left:auto;font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
+
+  .names{display:flex;flex-wrap:wrap;gap:14px 40px;padding-left:21px}
+  @media (max-width:600px){ .names{gap:12px 28px;padding-left:20px} }
+  .person{font-weight:500;font-size:clamp(18px,5vw,22px);color:var(--text);
+    position:relative;transition:color .18s;cursor:default}
+  .person::after{content:"";position:absolute;left:0;right:100%;bottom:-3px;height:1.5px;
+    background:currentColor;transition:right .25s ease;opacity:.6}
+  .t-amber .person:hover{color:var(--amber)} .t-coral .person:hover{color:var(--coral)} .t-teal .person:hover{color:var(--teal)}
+  .person:hover::after{right:0}
+
+  .empty{text-align:center;color:var(--muted);padding:40px 24px 10px}
+  .empty .big{font-family:'Syne',sans-serif;font-weight:700;color:var(--text);font-size:22px;margin-bottom:12px}
+
+  .note{color:var(--muted);text-align:center;font-size:14px;line-height:1.7;max-width:480px;margin:64px auto 0}
+
+  .sign{max-width:520px;margin:72px auto 0;padding-top:40px;border-top:1px solid var(--border);text-align:center}
+  .sign p{color:#b4b4bd;font-size:16px;line-height:1.85}
+  .sign .from{margin-top:22px;color:var(--text);font-weight:600}
+  .sign .who{font-family:'Syne',sans-serif;font-weight:700;font-size:22px;color:var(--text);margin-top:2px;letter-spacing:.5px}
+  .sign .role{color:var(--faint);font-size:13px;margin-top:4px}
+
+  .foot{color:var(--faint);font-size:12px;text-align:center;margin-top:56px;line-height:1.7}
+  .foot b{color:var(--muted);font-weight:600}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand"><span class="logo">INTR</span></div>
+
+    <div class="eyebrow">A note from Omar</div>
+    <h1 class="tag">Thank&nbsp;you.</h1>
+    <p class="lead">You backed Intr before it was finished — before the coach could explain itself, before it reached iPhone, when it was just a working idea and a promise. You didn't buy a product. You made one possible. I don't take that lightly, and I won't forget who was here early.</p>
+    <p class="lead" style="margin-top:-14px">Your name is on this page — permanently. Not a badge that expires. A record of the people this was built with.</p>
+    <div class="count"><span class="n" id="total">0</span><span class="l">of you, so far</span></div>
+
+    <div id="wall"></div>
+
+    <div id="emptyState" class="empty">
+      <div class="big">The list is waiting for its first name.</div>
+      Back Intr before launch and your name lands here — a permanent thank-you.
+    </div>
+
+    <p class="note">Want your name shown differently — a nickname, initials, or left off entirely? Just ask. This list is yours as much as mine.</p>
+
+    <div class="sign">
+      <p>I'm one person building the training app I always wished existed. Every name above is a reason to keep going on the slow days. Thank you for believing in it early — I'll keep you posted honestly, the good and the slow.</p>
+      <div class="from">— with gratitude,</div>
+      <div class="who">Omar</div>
+      <div class="role">Founder &amp; developer, Intr</div>
+    </div>
+
+    <div class="foot">
+      <b>Intr</b> — live on Google Play, coming to iPhone.<br>
+      No ads. No data selling. No streaks. Training free forever.
+    </div>
+  </div>
+
+<script>
+  // ── ADD CONTRIBUTORS HERE ───────────────────────────────────────
+  const CONTRIBUTORS = {
+    lifetime: [],   // €100 Lifetime Founder
+    member:   [],   // €50 / Early Bird
+    backer:   []    // €5 / €25
+  };
+  // ────────────────────────────────────────────────────────────────
+
+  const TIERS = [
+    { key:"lifetime", label:"Lifetime Founders", cls:"t-amber", badge:"here for the long haul" },
+    { key:"member",   label:"Founding Members",  cls:"t-coral", badge:"in early" },
+    { key:"backer",   label:"Founding Backers",  cls:"t-teal",  badge:"thank you" }
+  ];
+
+  const all = [...CONTRIBUTORS.lifetime, ...CONTRIBUTORS.member, ...CONTRIBUTORS.backer];
+  const totalEl = document.getElementById("total");
+  const wall = document.getElementById("wall");
+  if (all.length === 0){
+    document.getElementById("emptyState").style.display = "";
+  } else {
+    document.getElementById("emptyState").style.display = "none";
+    TIERS.forEach(t => {
+      const names = CONTRIBUTORS[t.key];
+      if (!names || names.length === 0) return;
+      const section = document.createElement("div");
+      section.className = "tier " + t.cls;
+      const head = document.createElement("div");
+      head.className = "tier-head";
+      head.innerHTML = '<span class="dot"></span><span class="tier-name"></span>';
+      head.querySelector(".tier-name").textContent = t.label;
+      const names_el = document.createElement("div");
+      names_el.className = "names";
+      names.forEach(n => {
+        const el = document.createElement("span");
+        el.className = "person";
+        el.textContent = n;
+        names_el.appendChild(el);
+      });
+      section.appendChild(head); section.appendChild(names_el);
+      wall.appendChild(section);
+    });
+    // animated count-up
+    let c = 0; const target = all.length; const step = Math.max(1, Math.round(target/40));
+    const tick = () => { c = Math.min(target, c+step); totalEl.textContent = c; if (c<target) requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  }
+</script>
+</body>
+</html>
