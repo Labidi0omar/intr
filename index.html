@@ -1,59 +1,150 @@
 <!DOCTYPE html>
 <!--
-  Landing page for Intr's legal documents. Host this whole folder (index.html,
-  privacy-policy.html, terms-of-use.html) at a public, non-PDF URL — e.g. GitHub Pages.
-  The Privacy Policy URL you give Google Play should point to privacy-policy.html.
+  Public landing page for Intr. Host this whole folder (index.html, privacy-policy.html,
+  terms-of-use.html, account-deletion.html) at a public, non-PDF URL — e.g. GitHub Pages.
+  The Privacy Policy URL you give Google Play must still point to privacy-policy.html.
+  To change the Google Play link, edit the href on the "Get it on Google Play" button below.
 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Intr — Legal</title>
+<title>Intr — A coach in your pocket</title>
+<meta name="description" content="Intr is a strength training app that adapts to your training, explains every decision, and never guilts you. No streaks, no data selling. Training free forever.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root { --bg: #070708; --card: #141418; --text: #f2f2f4; --muted: #9a9aa2; --accent: #2dd4bf; --border: #26262c; }
-  * { box-sizing: border-box; }
-  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text);
-         margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
-  .wrap { max-width: 480px; width: 100%; text-align: center; }
-  h1 { font-size: 2.2rem; margin: 0 0 4px; letter-spacing: -0.02em; }
-  .tag { color: var(--muted); margin: 0 0 32px; font-size: 0.95rem; }
-  a.card { display: block; text-decoration: none; color: var(--text); background: var(--card);
-           border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px; margin: 12px 0; text-align: left;
-           transition: border-color .15s ease, transform .15s ease; }
-  a.card:hover { border-color: var(--accent); transform: translateY(-1px); }
-  a.card .t { font-size: 1.1rem; font-weight: 600; }
-  a.card .d { color: var(--muted); font-size: 0.9rem; margin-top: 4px; }
-  a.card .arrow { float: right; color: var(--accent); font-size: 1.2rem; }
-  footer { color: var(--muted); font-size: 0.8rem; margin-top: 28px; }
-  footer a { color: var(--muted); }
+  :root{
+    --bg:#070708; --panel:#0f0f11; --border:#1e1e22;
+    --text:#f5f5f6; --muted:#8a8a92; --faint:#55555d;
+    --teal:#2dd4bf; --coral:#fb7185; --amber:#fbbf24;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--text);font-family:'DM Sans',system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;overflow-x:hidden;position:relative}
+  body::before{content:"";position:fixed;top:-340px;left:50%;transform:translateX(-50%);
+    width:960px;height:680px;pointer-events:none;z-index:0;
+    background:radial-gradient(closest-side, rgba(45,212,191,.14), rgba(251,113,133,.05) 55%, transparent 75%);filter:blur(20px)}
+  body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+    background:radial-gradient(120% 90% at 50% 0%, transparent 58%, rgba(0,0,0,.55))}
+  a{color:var(--teal);text-decoration:none}
+
+  .wrap{position:relative;z-index:1;max-width:920px;margin:0 auto;padding:0 24px}
+
+  nav{display:flex;align-items:center;justify-content:center;padding:26px 0 0}
+  .logo{font-family:'Syne',sans-serif;font-weight:800;font-size:19px;letter-spacing:3px;
+    padding:8px 15px;border-radius:11px;border:1px solid var(--border);background:linear-gradient(180deg,#141416,#0d0d0f)}
+
+  .hero{text-align:center;padding:70px 0 24px}
+  .eyebrow{font-family:'Syne',sans-serif;font-weight:600;font-size:12px;letter-spacing:4px;
+    text-transform:uppercase;color:var(--teal);margin-bottom:20px}
+  h1{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(30px,5.2vw,52px);
+    line-height:1.12;letter-spacing:-1px;margin:0 auto 24px;max-width:820px}
+  h1 .grad{background:linear-gradient(180deg,#fff 35%,#c9c9d0);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .lead{color:#c4c4cc;font-size:clamp(17px,4.4vw,20px);line-height:1.7;max-width:600px;margin:0 auto 36px}
+
+  .ctas{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-bottom:14px}
+  .btn{display:inline-flex;align-items:center;gap:10px;font-weight:600;font-size:15px;
+    padding:14px 24px;border-radius:12px;transition:transform .15s,filter .15s,border-color .15s}
+  .btn-primary{background:var(--teal);color:#04211d}
+  .btn-primary:hover{filter:brightness(1.08);transform:translateY(-1px)}
+  .btn-ghost{border:1px solid var(--border);color:var(--text);background:var(--panel)}
+  .btn-ghost:hover{border-color:var(--teal);transform:translateY(-1px)}
+  .soon{color:var(--faint);font-size:13px;margin-top:6px}
+
+  .section{padding:64px 0}
+  .kicker{font-family:'Syne',sans-serif;font-weight:700;font-size:13px;letter-spacing:2px;
+    text-transform:uppercase;color:var(--muted);text-align:center;margin-bottom:12px}
+  .h2{font-family:'Syne',sans-serif;font-weight:700;font-size:clamp(26px,5vw,38px);
+    text-align:center;letter-spacing:-.5px;margin-bottom:44px;line-height:1.15}
+
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  @media (max-width:720px){ .grid3{grid-template-columns:1fr} }
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:26px 24px}
+  .card .dot{width:10px;height:10px;border-radius:50%;margin-bottom:16px}
+  .card.teal .dot{background:var(--teal);box-shadow:0 0 12px rgba(45,212,191,.5)}
+  .card.coral .dot{background:var(--coral);box-shadow:0 0 12px rgba(251,113,133,.5)}
+  .card.amber .dot{background:var(--amber);box-shadow:0 0 12px rgba(251,191,36,.5)}
+  .card h3{font-family:'Syne',sans-serif;font-weight:700;font-size:18px;margin-bottom:10px}
+  .card p{color:var(--muted);font-size:15px;line-height:1.65}
+
+  .principles{background:var(--panel);border:1px solid var(--border);border-radius:20px;
+    padding:38px 28px;display:grid;grid-template-columns:repeat(3,1fr);gap:22px;text-align:center}
+  @media (max-width:720px){ .principles{grid-template-columns:1fr;gap:26px} }
+  .principle .p-t{font-family:'Syne',sans-serif;font-weight:700;font-size:16px}
+  .principle.teal .p-t{color:var(--teal)} .principle.coral .p-t{color:var(--coral)} .principle.amber .p-t{color:var(--amber)}
+  .principle .p-d{color:var(--muted);font-size:13px;margin-top:6px;line-height:1.5}
+
+  footer{text-align:center;color:var(--faint);font-size:13px;padding:56px 0 64px;line-height:1.8;
+    border-top:1px solid var(--border);margin-top:20px}
+  .foot-links{display:flex;flex-wrap:wrap;justify-content:center;gap:10px 22px;margin-bottom:26px}
+  .foot-links a{color:var(--muted);font-size:14px;font-weight:500;transition:color .15s}
+  .foot-links a:hover{color:var(--teal)}
+  footer a{color:var(--muted)}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>Intr</h1>
-  <p class="tag">Legal &amp; privacy documents</p>
 
-  <a class="card" href="privacy-policy.html">
-    <span class="arrow">→</span>
-    <div class="t">Privacy Policy</div>
-    <div class="d">What data Intr collects, how it's used, and your rights.</div>
-  </a>
+  <nav><span class="logo">INTR</span></nav>
 
-  <a class="card" href="terms-of-use.html">
-    <span class="arrow">→</span>
-    <div class="t">Terms of Use</div>
-    <div class="d">The agreement governing your use of Intr, including health &amp; safety.</div>
-  </a>
+  <header class="hero">
+    <div class="eyebrow">A coach in your pocket</div>
+    <h1>Training that <span class="grad">adapts, explains,</span> and never guilts you.</h1>
+    <p class="lead">Most training apps either ignore what's happening in your body or turn lifting into a game of streaks and guilt. Intr does neither. It reads your real training, adjusts your plan, and tells you <em>why</em> — so every session makes you not just stronger, but smarter about how you get stronger.</p>
+    <div class="ctas">
+      <!-- To change the Play Store link, edit the href below -->
+      <a class="btn btn-primary" href="https://shorturl.at/JMIUT" target="_blank" rel="noopener">Get it on Google Play</a>
+      <a class="btn btn-ghost" href="#how">See how it works</a>
+      <a class="btn btn-ghost" href="contributors.html">Contributors</a>
+    </div>
+    <div class="soon">Live on Android · Coming to iPhone</div>
+  </header>
 
-  <a class="card" href="account-deletion.html">
-    <span class="arrow">→</span>
-    <div class="t">Account &amp; Data Deletion</div>
-    <div class="d">How to request deletion of your account and what data is removed.</div>
-  </a>
+  <section class="section" id="how">
+    <div class="kicker">How it works</div>
+    <h2 class="h2">A coach, not a calculator.</h2>
+    <div class="grid3">
+      <div class="card teal">
+        <div class="dot"></div>
+        <h3>Adapts to your training</h3>
+        <p>Intr tracks how your lifts, energy, and effort are trending — and adjusts your plan to match. Strong stretch, it pushes. Run down, it backs off. On purpose, never as a failure.</p>
+      </div>
+      <div class="card coral">
+        <div class="dot"></div>
+        <h3>Explains every decision</h3>
+        <p>Every weight comes with the reasoning behind it, drawn from your own numbers. You don't just follow the plan — you understand it, and learn as you lift.</p>
+      </div>
+      <div class="card amber">
+        <div class="dot"></div>
+        <h3>No guilt, no gimmicks</h3>
+        <p>Miss a week and Intr rebuilds your plan from where you actually are. No broken streaks, no badges, no manipulation. Just calm, clear training.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="kicker">What Intr will never do</div>
+    <h2 class="h2">Built to respect you.</h2>
+    <div class="principles">
+      <div class="principle teal"><div class="p-t">No ads</div><div class="p-d">Ever.</div></div>
+      <div class="principle coral"><div class="p-t">No data selling</div><div class="p-d">Your training is never the product.</div></div>
+      <div class="principle amber"><div class="p-t">Free to train</div><div class="p-d">The core experience, no paywall.</div></div>
+    </div>
+  </section>
 
   <footer>
-    © 2026 Omar Labidi · <a href="mailto:labidiomar04@gmail.com">labidiomar04@gmail.com</a>
+    <div class="foot-links">
+      <a href="privacy-policy.html">Privacy Policy</a>
+      <a href="terms-of-use.html">Terms of Use</a>
+      <a href="account-deletion.html">Account &amp; Data Deletion</a>
+    </div>
+    <strong style="color:var(--muted);font-family:'Syne',sans-serif">Intr</strong> — a coach in your pocket.<br>
+    &copy; 2026 Omar Labidi &middot; <a href="mailto:labidiomar04@gmail.com">labidiomar04@gmail.com</a>
   </footer>
+
 </div>
 </body>
 </html>
