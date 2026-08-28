@@ -1,150 +1,1369 @@
 <!DOCTYPE html>
 <!--
-  Public landing page for Intr. Host this whole folder (index.html, privacy-policy.html,
-  terms-of-use.html, account-deletion.html) at a public, non-PDF URL — e.g. GitHub Pages.
-  The Privacy Policy URL you give Google Play must still point to privacy-policy.html.
-  To change the Google Play link, edit the href on the "Get it on Google Play" button below.
+  Public marketing site for Intr. Host this whole folder (index.html, privacy-policy.html,
+  terms-of-use.html, account-deletion.html, contributors.html, screens/) at a public,
+  non-PDF URL — e.g. GitHub Pages. The Privacy Policy URL you give Google Play must still
+  point to privacy-policy.html.
+  To change the Google Play link, edit every href marked PLAY_LINK below.
+  Screenshots in screens/ are real captures from the Play Store build, resized to 560px webp.
 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Intr — A coach in your pocket</title>
-<meta name="description" content="Intr is a strength training app that adapts to your training, explains every decision, and never guilts you. No streaks, no data selling. Training free forever.">
+<title>Intr — a coach in your pocket, not another spreadsheet</title>
+<meta name="description" content="Intr is a strength training app that prescribes your weight set by set, reads your real trend instead of your streak, rebuilds your plan when life gets in the way, and explains every decision. Early access, live on Android. Free to train.">
+<meta name="theme-color" content="#070708">
+<link rel="canonical" href="https://labidi0omar.github.io/intr/">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Intr">
+<meta property="og:title" content="Intr — a coach in your pocket, not another spreadsheet">
+<meta property="og:description" content="Adaptive strength training that prescribes your weight, reads your real trend, and explains every decision. Early access, live on Android. Free to train.">
+<meta property="og:url" content="https://labidi0omar.github.io/intr/">
+<!-- Landscape 1.91:1. A portrait screenshot here gets centre-cropped by every
+     platform into a thin slice of a phone — hence the purpose-built card. -->
+<meta property="og:image" content="https://labidi0omar.github.io/intr/og-card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Intr — a coach in your pocket, not another spreadsheet. A phone showing the Intr dashboard with a coach message and today's session.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Intr — a coach in your pocket, not another spreadsheet">
+<meta name="twitter:description" content="Adaptive strength training that prescribes your weight, reads your real trend, and explains every decision. Early access, live on Android. Free to train.">
+<meta name="twitter:image" content="https://labidi0omar.github.io/intr/og-card.png">
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23070708'/%3E%3Crect x='14' y='16' width='6' height='32' rx='3' fill='%230EA5E9'/%3E%3Crect x='27' y='24' width='6' height='24' rx='3' fill='%23F43F5E'/%3E%3Crect x='40' y='30' width='6' height='18' rx='3' fill='%23F59E0B'/%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="site.webmanifest">
+
+<!-- Structured data. Answers below are byte-identical to the visible FAQ copy —
+     Google drops rich results when they diverge. Deliberately no aggregateRating:
+     inventing review counts is exactly the kind of thing this app is against. -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "SoftwareApplication",
+      "name": "Intr",
+      "alternateName": "Intr — a coach in your pocket",
+      "applicationCategory": "HealthApplication",
+      "applicationSubCategory": "Fitness",
+      "operatingSystem": "Android",
+      "url": "https://labidi0omar.github.io/intr/",
+      "image": "https://labidi0omar.github.io/intr/og-card.png",
+      "description": "Intr is a strength training app that prescribes your weight set by set, reads your real training trend instead of your streak, rebuilds your plan when life gets in the way, and explains every decision.",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "EUR",
+        "availability": "https://schema.org/InStock"
+      },
+      "author": {
+        "@type": "Person",
+        "name": "Omar Labidi",
+        "email": "labidiomar04@gmail.com"
+      }
+    },
+    {
+      "@type": "VideoObject",
+      "name": "Intr — a full session, unedited",
+      "description": "One unedited take through the whole Intr loop: open the app, start the session, log the sets with effort ratings, and finish.",
+      "thumbnailUrl": "https://i.ytimg.com/vi/dknC8KqTD-w/hqdefault.jpg",
+      "embedUrl": "https://www.youtube-nocookie.com/embed/dknC8KqTD-w",
+      "duration": "PT1M42S",
+      "uploadDate": "2026-07-25"
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "Is it really free?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. Planning, logging, the coach, your full history — the core experience has no paywall and no ads. If a paid tier exists in future it will fund development, not hold your training hostage."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is there an iPhone version?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Not yet — Intr is on Android today, and iOS is actively in development on the same cross-platform codebase. See the roadmap for where it sits."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Do I need to be experienced to use it?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. You answer a few questions in onboarding — days per week, goal, gym or home, experience — and Intr builds the split, picks the exercises, and sets the starting loads. It gets more useful the more you log, but it's useful on day one."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Can I change what it gives me?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "All of it. Swap any exercise, override any prescribed weight, decline any deload offer, edit your schedule. Intr is opinionated on purpose, but nothing it decides is locked — and it learns from what you actually do rather than what it told you to do."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is it an AI app?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Partly, and specifically. The load maths, trend reads, deload logic, and plan generation are deterministic, unit-tested code — because arithmetic about your squat should give the same answer twice. AI is used where language is the job: writing the coach's observations in readable English. The numbers never come from a guess."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What happens to my data?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "It's yours. Every table is protected by row-level security so only your account can read your rows, nothing is sold or brokered, and you can delete your account and all its data from inside the app at any time — see Account & Data Deletion and the Privacy Policy."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Who builds this?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "One developer — Omar Labidi — who got tired of black-box training apps that hand you numbers and expect obedience. If you have a bug, an idea, or a disagreement, the email address goes to a real inbox."
+          }
+        }
+      ]
+    }
+  ]
+}
+</script>
+
+<!-- Set before any stylesheet so the reveal animation's hidden state only
+     ever applies when JS is definitely alive. Without this the page renders
+     as an empty shell for anyone with JS blocked. -->
+<script>document.documentElement.className='js'</script>
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<!-- Loaded async: the font CSS was the page's only render-blocking request.
+     print-media flip is the standard trick; the <noscript> covers JS-off. -->
+<link rel="stylesheet" media="print" onload="this.media='all';this.onload=null"
+      href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600&display=swap">
+<noscript><link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600&display=swap"></noscript>
+
+<link rel="stylesheet" href="site.css">
+
 <style>
-  :root{
-    --bg:#070708; --panel:#0f0f11; --border:#1e1e22;
-    --text:#f5f5f6; --muted:#8a8a92; --faint:#55555d;
-    --teal:#2dd4bf; --coral:#fb7185; --amber:#fbbf24;
+/* ═══════════════════════════════════════════════════════════════════
+   Page-specific styling for the landing page. Everything shared with
+   the rest of the site (tokens, nav, footer, buttons, prose, print)
+   lives in site.css.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Hero ───────────────────────────────────────────────────────── */
+.hero{padding:76px 0 40px}
+/* ~63/37. The phone only needs ~370px; the headline needs every pixel it
+   can get, or it wraps to four lines with a two-word orphan. */
+.hero-grid{display:grid;grid-template-columns:1.28fr .72fr;gap:52px;align-items:center}
+@media (max-width:940px){.hero-grid{grid-template-columns:1fr;gap:52px}.hero{padding:52px 0 20px}}
+
+.pill{
+  display:inline-flex;align-items:center;gap:9px;
+  padding:7px 14px 7px 11px;border-radius:999px;
+  border:1px solid var(--border-lit);background:rgba(255,255,255,.03);
+  font-size:13.5px;color:var(--dim);margin-bottom:26px;
+}
+.pulse{width:7px;height:7px;border-radius:50%;background:var(--green);flex:none;
+  box-shadow:0 0 0 0 rgba(34,197,94,.6);animation:pulse 2.6s infinite}
+@keyframes pulse{
+  70%{box-shadow:0 0 0 9px rgba(34,197,94,0)}
+  100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}
+}
+.hero h1{margin-bottom:24px}
+.hero .lead{max-width:560px;margin-bottom:34px}
+.hero-ctas{display:flex;gap:13px;flex-wrap:wrap;margin-bottom:22px}
+.hero-note{color:var(--faint);font-size:13.5px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.hero-note b{color:var(--muted);font-weight:500}
+.dotsep{width:3px;height:3px;border-radius:50%;background:var(--faint)}
+
+/* ── Phone frame ────────────────────────────────────────────────── */
+.phone{
+  position:relative;width:100%;max-width:300px;margin:0 auto;
+  border-radius:38px;padding:9px;
+  background:linear-gradient(160deg,#26262c,#0d0d10 55%);
+  border:1px solid #2e2e36;
+  box-shadow:0 50px 100px -40px rgba(0,0,0,.95),0 0 70px -30px rgba(14,165,233,.4);
+}
+.phone::after{
+  content:"";position:absolute;top:16px;left:50%;transform:translateX(-50%);
+  width:76px;height:5px;border-radius:99px;background:#000;opacity:.85;z-index:3;
+}
+/* height:auto is mandatory, not cosmetic. The width/height attributes on the
+   <img> map to real CSS width/height, so `width:100%` alone leaves the height
+   pinned to the attribute (2211px) and the screenshot renders ~4x too tall. */
+.phone img{border-radius:30px;width:100%;height:auto}
+.phone-float{animation:float 7s ease-in-out infinite}
+@keyframes float{50%{transform:translateY(-14px)}}
+
+.hero-phone{position:relative}
+.hero-phone::before{
+  content:"";position:absolute;inset:-12% -6%;z-index:0;pointer-events:none;
+  background:radial-gradient(closest-side,rgba(14,165,233,.24),transparent 70%);
+  filter:blur(30px);
+}
+/* Once the hero stacks, this column goes full width and the glow's -6% inset
+   becomes ~42px a side against 24px of page padding — which scrolls the whole
+   document sideways. Cap the column so the glow keeps hugging the phone. */
+@media (max-width:940px){.hero-phone{max-width:360px;margin:0 auto}}
+
+/* Floating spec chips around the hero phone */
+.chip{
+  position:absolute;z-index:4;
+  display:flex;align-items:center;gap:9px;
+  padding:10px 14px;border-radius:13px;
+  background:rgba(15,15,17,.86);backdrop-filter:blur(10px);
+  -webkit-backdrop-filter:blur(10px);
+  border:1px solid var(--border-lit);
+  font-size:13px;font-weight:500;color:var(--dim);white-space:nowrap;
+  box-shadow:0 18px 40px -18px rgba(0,0,0,.9);
+}
+.chip i{width:8px;height:8px;border-radius:50%;flex:none;font-style:normal}
+/* Offsets are tuned so roughly a third of each chip laps onto the phone —
+   enough to read as layered, little enough to keep the app UI legible. */
+.chip.k1{top:16%;left:-58px;animation:float 8s ease-in-out infinite}
+.chip.k1 i{background:var(--blue);box-shadow:0 0 10px var(--blue)}
+.chip.k2{top:47%;right:-64px;animation:float 9s ease-in-out .8s infinite}
+.chip.k2 i{background:var(--green);box-shadow:0 0 10px var(--green)}
+.chip.k3{bottom:12%;left:-70px;animation:float 7.5s ease-in-out 1.6s infinite}
+.chip.k3 i{background:var(--amber);box-shadow:0 0 10px var(--amber)}
+/* The right-hand chip hangs ~64px past the content column, and the page only
+   has 24px of side padding — so below roughly 1140+2*64+padding it pushes the
+   document wider than the viewport. Decorative only: hide rather than clip. */
+@media (max-width:1320px){.chip{display:none}}
+
+/* ── Stat strip ─────────────────────────────────────────────────── */
+.stats{
+  display:grid;grid-template-columns:repeat(4,1fr);
+  border:1px solid var(--border);border-radius:20px;overflow:hidden;
+  background:linear-gradient(180deg,rgba(19,19,22,.85),rgba(12,12,14,.6));
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+}
+@media (max-width:760px){.stats{grid-template-columns:repeat(2,1fr)}}
+.stat{padding:30px 24px;border-right:1px solid var(--border);text-align:center}
+.stat:last-child{border-right:none}
+@media (max-width:760px){
+  .stat{border-bottom:1px solid var(--border)}
+  .stat:nth-child(2n){border-right:none}
+  .stat:nth-last-child(-n+2){border-bottom:none}
+}
+.stat .n{font-family:'Syne',sans-serif;font-weight:800;font-size:38px;letter-spacing:-1.5px;line-height:1;white-space:nowrap}
+.stat:nth-child(1) .n{color:var(--blue)}
+.stat:nth-child(2) .n{color:var(--coral)}
+.stat:nth-child(3) .n{color:var(--amber)}
+.stat:nth-child(4) .n{color:var(--green)}
+.stat .l{color:var(--muted);font-size:13.5px;margin-top:10px;line-height:1.45}
+
+/* ── Cards ──────────────────────────────────────────────────────── */
+.card{
+  position:relative;border:1px solid var(--border);border-radius:18px;
+  background:linear-gradient(180deg,var(--panel-2),var(--panel));
+  padding:30px 28px;overflow:hidden;
+  transition:transform .3s var(--ease),border-color .3s;
+}
+.card:hover{transform:translateY(-4px);border-color:var(--border-lit)}
+.card::before{ /* pointer spotlight */
+  content:"";position:absolute;inset:0;pointer-events:none;opacity:0;
+  transition:opacity .35s;
+  background:radial-gradient(280px circle at var(--mx,50%) var(--my,0%),rgba(255,255,255,.055),transparent 70%);
+}
+.card:hover::before{opacity:1}
+.card h3{margin-bottom:11px}
+.card p{color:var(--muted);font-size:15.5px;line-height:1.68}
+.card .ico{
+  width:40px;height:40px;border-radius:11px;display:grid;place-items:center;
+  margin-bottom:18px;border:1px solid var(--border-lit);background:rgba(255,255,255,.03);
+}
+.card .ico svg{width:19px;height:19px}
+.tint-b .ico{border-color:rgba(14,165,233,.34);background:rgba(14,165,233,.09);color:var(--blue)}
+.tint-c .ico{border-color:rgba(244,63,94,.34);background:rgba(244,63,94,.09);color:var(--coral)}
+.tint-a .ico{border-color:rgba(245,158,11,.34);background:rgba(245,158,11,.09);color:var(--amber)}
+.tint-g .ico{border-color:rgba(34,197,94,.34);background:rgba(34,197,94,.09);color:var(--green)}
+
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+@media (max-width:900px){.grid3{grid-template-columns:1fr 1fr}}
+@media (max-width:660px){.grid2,.grid3{grid-template-columns:1fr}}
+
+/* ── The loop (3 steps) ─────────────────────────────────────────── */
+.loop{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;position:relative}
+@media (max-width:820px){.loop{grid-template-columns:1fr}}
+.step{position:relative;padding:32px 28px;border:1px solid var(--border);border-radius:18px;
+  background:linear-gradient(180deg,var(--panel-2),var(--panel));overflow:hidden}
+.step .num{
+  font-family:'Syne',sans-serif;font-weight:800;font-size:13px;letter-spacing:2px;
+  color:var(--faint);margin-bottom:20px;display:flex;align-items:center;gap:12px;
+}
+.step .num::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--border-lit),transparent)}
+.step h3{margin-bottom:11px}
+.step p{color:var(--muted);font-size:15.5px;line-height:1.68}
+.step .bar{position:absolute;left:0;top:0;height:2px;width:100%;transform:scaleX(1);transform-origin:0 50%;
+  transition:transform 1s var(--ease)}
+.js .step .bar{transform:scaleX(0)}
+.js .reveal.in .bar{transform:scaleX(1)}
+.step:nth-child(1) .bar{background:linear-gradient(90deg,var(--blue),transparent)}
+.step:nth-child(2) .bar{background:linear-gradient(90deg,var(--coral),transparent)}
+.step:nth-child(3) .bar{background:linear-gradient(90deg,var(--amber),transparent)}
+
+/* ── Video ──────────────────────────────────────────────────────── */
+/* Facade pattern: nothing from YouTube loads until the visitor clicks —
+   no iframe, no player JS, no cookies. Only the poster image is remote,
+   and i.ytimg.com is Google's deliberately cookieless asset domain. */
+.video-shell{max-width:900px;margin:0 auto}
+.video-frame{
+  position:relative;border:1px solid var(--border-lit);border-radius:20px;
+  overflow:hidden;background:var(--panel);aspect-ratio:16/9;
+  box-shadow:0 50px 100px -50px rgba(0,0,0,.9),0 0 80px -40px rgba(14,165,233,.35);
+}
+.video-frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+.video-facade{
+  position:absolute;inset:0;width:100%;height:100%;padding:0;border:0;
+  cursor:pointer;background:#000;display:block;
+}
+.video-facade img{width:100%;height:100%;object-fit:cover;opacity:.72;
+  transition:opacity .35s var(--ease),transform .5s var(--ease)}
+.video-facade:hover img{opacity:.92;transform:scale(1.02)}
+.video-facade::after{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(180deg,rgba(7,7,8,.15),rgba(7,7,8,.6));
+}
+.play-btn{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:76px;height:76px;border-radius:50%;z-index:2;
+  display:grid;place-items:center;
+  background:var(--blue);color:#04222e;
+  box-shadow:0 14px 44px -10px rgba(14,165,233,.85);
+  transition:transform .3s var(--ease),box-shadow .3s;
+}
+.video-facade:hover .play-btn{transform:translate(-50%,-50%) scale(1.09);
+  box-shadow:0 18px 56px -8px rgba(14,165,233,1)}
+.play-btn svg{width:26px;height:26px;margin-left:4px}
+.video-meta{
+  position:absolute;left:22px;bottom:20px;z-index:2;text-align:left;
+  display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+}
+.video-meta .t{font-family:'Syne',sans-serif;font-weight:700;font-size:16px;color:#fff}
+.video-meta .d{font-size:13px;color:rgba(255,255,255,.78);
+  border:1px solid rgba(255,255,255,.28);border-radius:999px;padding:3px 10px}
+@media (max-width:600px){
+  .play-btn{width:58px;height:58px}.play-btn svg{width:20px;height:20px}
+  .video-meta{left:16px;bottom:14px}.video-meta .t{font-size:14px}
+}
+.video-note{color:var(--faint);font-size:13.5px;text-align:center;margin-top:18px}
+.video-note a{color:var(--muted);text-decoration:underline;text-underline-offset:3px}
+
+/* ── Scroll-based motion ────────────────────────────────────────────
+   Two layers, both opt-in and both disabled under reduced motion:
+   1. [data-parallax] — a cheap, universal, transform-only translate the
+      scroll handler drives (works in every browser).
+   2. Native CSS scroll-driven animations (animation-timeline) — a
+      Chromium-only progressive enhancement that *scrubs* with scroll
+      position rather than firing once. Non-supporting browsers simply
+      keep the static element, so nothing regresses. */
+.phone-par{will-change:transform}
+@media (prefers-reduced-motion: reduce){
+  [data-parallax]{transform:none !important}
+}
+@media (prefers-reduced-motion: no-preference){
+  @supports (animation-timeline: view()){
+    /* The demo frame settles — un-desaturates and scales to 1 — as it
+       crosses into the middle of the viewport. */
+    .video-frame{
+      animation:frame-settle linear both;
+      animation-timeline:view();
+      animation-range:entry 6% cover 42%;
+    }
+    @keyframes frame-settle{
+      from{transform:scale(.93);filter:saturate(.6) brightness(.88)}
+      to{transform:none;filter:none}
+    }
+    /* Loop cards rise in step with the scroll instead of a one-shot fade. */
+    .loop .step{
+      animation:card-rise linear both;
+      animation-timeline:view();
+      animation-range:entry 2% entry 58%;
+    }
+    @keyframes card-rise{
+      from{opacity:.15;transform:translateY(40px)}
+      to{opacity:1;transform:none}
+    }
   }
-  *{box-sizing:border-box;margin:0;padding:0}
-  html{scroll-behavior:smooth}
-  body{background:var(--bg);color:var(--text);font-family:'DM Sans',system-ui,sans-serif;
-    -webkit-font-smoothing:antialiased;overflow-x:hidden;position:relative}
-  body::before{content:"";position:fixed;top:-340px;left:50%;transform:translateX(-50%);
-    width:960px;height:680px;pointer-events:none;z-index:0;
-    background:radial-gradient(closest-side, rgba(45,212,191,.14), rgba(251,113,133,.05) 55%, transparent 75%);filter:blur(20px)}
-  body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
-    background:radial-gradient(120% 90% at 50% 0%, transparent 58%, rgba(0,0,0,.55))}
-  a{color:var(--teal);text-decoration:none}
+}
 
-  .wrap{position:relative;z-index:1;max-width:920px;margin:0 auto;padding:0 24px}
+/* ── Feature rows ───────────────────────────────────────────────── */
+.frow{display:grid;grid-template-columns:1fr 1fr;gap:70px;align-items:center;padding:78px 0}
+.frow:first-of-type{padding-top:16px}
+.frow.flip .fcopy{order:2}
+@media (max-width:900px){
+  .frow{grid-template-columns:1fr;gap:44px;padding:56px 0}
+  .frow.flip .fcopy{order:0}
+}
+.fcopy h2,.fcopy h3{margin-bottom:20px;font-size:clamp(26px,3.6vw,38px)}
+.fcopy p{color:var(--muted);font-size:17px;line-height:1.75;margin-bottom:18px}
+.fcopy p strong{color:var(--dim);font-weight:600}
+.flist{list-style:none;margin-top:24px;display:grid;gap:12px}
+.flist li{display:flex;gap:12px;align-items:flex-start;color:var(--dim);font-size:15.5px;line-height:1.6}
+.flist svg{width:17px;height:17px;flex:none;margin-top:4px;color:var(--blue)}
+.frow.c .flist svg{color:var(--coral)}
+.frow.a .flist svg{color:var(--amber)}
+.frow.g .flist svg{color:var(--green)}
 
-  nav{display:flex;align-items:center;justify-content:center;padding:26px 0 0}
-  .logo{font-family:'Syne',sans-serif;font-weight:800;font-size:19px;letter-spacing:3px;
-    padding:8px 15px;border-radius:11px;border:1px solid var(--border);background:linear-gradient(180deg,#141416,#0d0d0f)}
+.quote{
+  margin-top:26px;padding:18px 20px;border-left:2px solid var(--blue);
+  border-radius:0 12px 12px 0;background:rgba(14,165,233,.055);
+  font-size:15.5px;color:var(--dim);line-height:1.6;
+}
+.quote span{display:block;color:var(--faint);font-size:12.5px;margin-top:8px;
+  letter-spacing:1.4px;text-transform:uppercase;font-family:'Syne',sans-serif;font-weight:700}
+.frow.c .quote{border-left-color:var(--coral);background:rgba(244,63,94,.055)}
+.frow.a .quote{border-left-color:var(--amber);background:rgba(245,158,11,.055)}
+.frow.g .quote{border-left-color:var(--green);background:rgba(34,197,94,.055)}
 
-  .hero{text-align:center;padding:70px 0 24px}
-  .eyebrow{font-family:'Syne',sans-serif;font-weight:600;font-size:12px;letter-spacing:4px;
-    text-transform:uppercase;color:var(--teal);margin-bottom:20px}
-  h1{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(30px,5.2vw,52px);
-    line-height:1.12;letter-spacing:-1px;margin:0 auto 24px;max-width:820px}
-  h1 .grad{background:linear-gradient(180deg,#fff 35%,#c9c9d0);-webkit-background-clip:text;background-clip:text;color:transparent}
-  .lead{color:#c4c4cc;font-size:clamp(17px,4.4vw,20px);line-height:1.7;max-width:600px;margin:0 auto 36px}
+/* ── Principles ─────────────────────────────────────────────────── */
+.principles{
+  border:1px solid var(--border);border-radius:24px;padding:44px 40px;
+  background:linear-gradient(180deg,rgba(19,19,22,.9),rgba(11,11,13,.75));
+  display:grid;grid-template-columns:repeat(4,1fr);gap:32px;
+}
+@media (max-width:900px){.principles{grid-template-columns:1fr 1fr;gap:30px;padding:36px 28px}}
+@media (max-width:560px){.principles{grid-template-columns:1fr}}
+.pr .t{font-family:'Syne',sans-serif;font-weight:800;font-size:17px;margin-bottom:8px}
+.pr:nth-child(1) .t{color:var(--blue)} .pr:nth-child(2) .t{color:var(--coral)}
+.pr:nth-child(3) .t{color:var(--amber)} .pr:nth-child(4) .t{color:var(--green)}
+.pr .d{color:var(--muted);font-size:14.5px;line-height:1.6}
 
-  .ctas{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-bottom:14px}
-  .btn{display:inline-flex;align-items:center;gap:10px;font-weight:600;font-size:15px;
-    padding:14px 24px;border-radius:12px;transition:transform .15s,filter .15s,border-color .15s}
-  .btn-primary{background:var(--teal);color:#04211d}
-  .btn-primary:hover{filter:brightness(1.08);transform:translateY(-1px)}
-  .btn-ghost{border:1px solid var(--border);color:var(--text);background:var(--panel)}
-  .btn-ghost:hover{border-color:var(--teal);transform:translateY(-1px)}
-  .soon{color:var(--faint);font-size:13px;margin-top:6px}
+/* ── Roadmap ────────────────────────────────────────────────────── */
+.road{display:grid;gap:0;border:1px solid var(--border);border-radius:20px;overflow:hidden}
+.ritem{display:grid;grid-template-columns:150px 1fr;gap:28px;padding:26px 30px;
+  border-bottom:1px solid var(--border);align-items:start;transition:background .25s}
+.ritem:last-child{border-bottom:none}
+.ritem:hover{background:rgba(255,255,255,.018)}
+@media (max-width:700px){.ritem{grid-template-columns:1fr;gap:12px;padding:22px}}
+.rtag{
+  display:inline-flex;align-items:center;gap:8px;font-family:'Syne',sans-serif;
+  font-weight:700;font-size:11.5px;letter-spacing:1.8px;text-transform:uppercase;
+  padding:6px 11px;border-radius:8px;border:1px solid var(--border-lit);color:var(--muted);
+}
+.rtag.live{color:var(--green);border-color:rgba(34,197,94,.4);background:rgba(34,197,94,.08)}
+.rtag.next{color:var(--blue);border-color:rgba(14,165,233,.4);background:rgba(14,165,233,.08)}
+.rtag.later{color:var(--amber);border-color:rgba(245,158,11,.36);background:rgba(245,158,11,.07)}
+.rbody h3{font-size:18px;margin-bottom:8px}
+.rbody p{color:var(--muted);font-size:15.5px;line-height:1.66}
 
-  .section{padding:64px 0}
-  .kicker{font-family:'Syne',sans-serif;font-weight:700;font-size:13px;letter-spacing:2px;
-    text-transform:uppercase;color:var(--muted);text-align:center;margin-bottom:12px}
-  .h2{font-family:'Syne',sans-serif;font-weight:700;font-size:clamp(26px,5vw,38px);
-    text-align:center;letter-spacing:-.5px;margin-bottom:44px;line-height:1.15}
+/* ── FAQ ────────────────────────────────────────────────────────── */
+.faq{display:grid;gap:12px;max-width:820px;margin:0 auto}
+.q{border:1px solid var(--border);border-radius:15px;background:var(--panel);
+  overflow:hidden;transition:border-color .25s}
+.q[open]{border-color:var(--border-lit)}
+.q summary{
+  list-style:none;cursor:pointer;padding:22px 26px;
+  font-family:'Syne',sans-serif;font-weight:700;font-size:16.5px;
+  display:flex;align-items:center;gap:18px;transition:color .2s;
+}
+.q summary::-webkit-details-marker{display:none}
+.q summary:hover{color:var(--blue)}
+.q summary::after{
+  content:"";margin-left:auto;flex:none;width:11px;height:11px;
+  border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);
+  transform:rotate(45deg) translate(-2px,-2px);transition:transform .3s var(--ease);
+}
+.q[open] summary::after{transform:rotate(-135deg) translate(-3px,-3px)}
+/* The UA sets display:none on closed <details> children, so an auto-height
+   transition can't run on close without JS holding the element open. Native
+   <details> keeps this keyboard- and no-JS-accessible, so animate the open
+   direction only rather than reimplement a disclosure widget. */
+.q[open] .ans{animation:ansIn .34s var(--ease) both}
+@keyframes ansIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+.q .ans{padding:0 26px 24px;color:var(--muted);font-size:16px;line-height:1.72}
+.q .ans a{color:var(--blue)}
 
-  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
-  @media (max-width:720px){ .grid3{grid-template-columns:1fr} }
-  .card{background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:26px 24px}
-  .card .dot{width:10px;height:10px;border-radius:50%;margin-bottom:16px}
-  .card.teal .dot{background:var(--teal);box-shadow:0 0 12px rgba(45,212,191,.5)}
-  .card.coral .dot{background:var(--coral);box-shadow:0 0 12px rgba(251,113,133,.5)}
-  .card.amber .dot{background:var(--amber);box-shadow:0 0 12px rgba(251,191,36,.5)}
-  .card h3{font-family:'Syne',sans-serif;font-weight:700;font-size:18px;margin-bottom:10px}
-  .card p{color:var(--muted);font-size:15px;line-height:1.65}
-
-  .principles{background:var(--panel);border:1px solid var(--border);border-radius:20px;
-    padding:38px 28px;display:grid;grid-template-columns:repeat(3,1fr);gap:22px;text-align:center}
-  @media (max-width:720px){ .principles{grid-template-columns:1fr;gap:26px} }
-  .principle .p-t{font-family:'Syne',sans-serif;font-weight:700;font-size:16px}
-  .principle.teal .p-t{color:var(--teal)} .principle.coral .p-t{color:var(--coral)} .principle.amber .p-t{color:var(--amber)}
-  .principle .p-d{color:var(--muted);font-size:13px;margin-top:6px;line-height:1.5}
-
-  footer{text-align:center;color:var(--faint);font-size:13px;padding:56px 0 64px;line-height:1.8;
-    border-top:1px solid var(--border);margin-top:20px}
-  .foot-links{display:flex;flex-wrap:wrap;justify-content:center;gap:10px 22px;margin-bottom:26px}
-  .foot-links a{color:var(--muted);font-size:14px;font-weight:500;transition:color .15s}
-  .foot-links a:hover{color:var(--teal)}
-  footer a{color:var(--muted)}
+/* ── Final CTA ──────────────────────────────────────────────────── */
+.finale{
+  position:relative;border:1px solid var(--border);border-radius:26px;
+  padding:70px 44px;text-align:center;overflow:hidden;
+  background:linear-gradient(180deg,rgba(20,20,24,.95),rgba(10,10,12,.9));
+}
+.finale::before{
+  content:"";position:absolute;inset:-60% -10% auto;height:340px;pointer-events:none;
+  background:radial-gradient(closest-side,rgba(14,165,233,.28),transparent 70%);filter:blur(20px);
+}
+.finale h2{margin-bottom:20px;position:relative}
+.finale p{color:var(--muted);font-size:18px;max-width:560px;margin:0 auto 34px;position:relative;line-height:1.7}
+.finale .hero-ctas{justify-content:center;position:relative}
+@media (max-width:600px){.finale{padding:52px 24px}}
 </style>
 </head>
 <body>
-<div class="wrap">
 
-  <nav><span class="logo">INTR</span></nav>
+<div class="aurora" aria-hidden="true"><span class="a1"></span><span class="a2"></span><span class="a3"></span></div>
+<div class="grid-veil" aria-hidden="true"></div>
+<div class="progress" id="progress" aria-hidden="true"></div>
 
-  <header class="hero">
-    <div class="eyebrow">A coach in your pocket</div>
-    <h1>Training that <span class="grad">adapts, explains,</span> and never guilts you.</h1>
-    <p class="lead">Most training apps either ignore what's happening in your body or turn lifting into a game of streaks and guilt. Intr does neither. It reads your real training, adjusts your plan, and tells you <em>why</em> — so every session makes you not just stronger, but smarter about how you get stronger.</p>
-    <div class="ctas">
-      <!-- To change the Play Store link, edit the href below -->
-      <a class="btn btn-primary" href="https://shorturl.at/JMIUT" target="_blank" rel="noopener">Get it on Google Play</a>
-      <a class="btn btn-ghost" href="#how">See how it works</a>
-      <a class="btn btn-ghost" href="contributors.html">Contributors</a>
+<a class="skip" href="#main">Skip to content</a>
+
+<!-- ═══ NAV ═══════════════════════════════════════════════════════ -->
+<header class="nav" id="nav">
+  <div class="wrap nav-in">
+    <a href="#top" class="logo" aria-label="Intr — home">INTR</a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#principles">Principles</a>
+      <a href="#roadmap">Roadmap</a>
+      <a href="#faq">FAQ</a>
+      <a href="contributors.html">Contributors</a>
+    </nav>
+    <!-- PLAY_LINK -->
+    <a class="btn btn-primary btn-sm nav-cta" href="https://play.google.com/store/apps/details?id=com.intr.app" target="_blank" rel="noopener">Get the app</a>
+    <button class="burger" id="burger" type="button"
+            aria-expanded="false" aria-controls="mobile-menu" aria-label="Open menu">
+      <span></span>
+    </button>
+  </div>
+  <div class="mobile-menu" id="mobile-menu">
+    <div class="wrap">
+      <nav aria-label="Mobile">
+        <a href="#how">How it works</a>
+        <a href="#features">Features</a>
+        <a href="#principles">Principles</a>
+        <a href="#roadmap">Roadmap</a>
+        <a href="#faq">FAQ</a>
+        <a href="contributors.html">Contributors</a>
+      </nav>
     </div>
-    <div class="soon">Live on Android · Coming to iPhone</div>
-  </header>
+  </div>
+</header>
 
-  <section class="section" id="how">
-    <div class="kicker">How it works</div>
-    <h2 class="h2">A coach, not a calculator.</h2>
-    <div class="grid3">
-      <div class="card teal">
-        <div class="dot"></div>
-        <h3>Adapts to your training</h3>
-        <p>Intr tracks how your lifts, energy, and effort are trending — and adjusts your plan to match. Strong stretch, it pushes. Run down, it backs off. On purpose, never as a failure.</p>
+<main id="main">
+
+<!-- ═══ HERO ══════════════════════════════════════════════════════ -->
+<section class="hero" id="top">
+  <div class="wrap hero-grid">
+
+    <div class="reveal">
+      <div class="pill"><span class="pulse"></span> Live on Google Play · v1.1 · Early access</div>
+      <h1>A <span class="grad">coach in your pocket</span> — not another spreadsheet.</h1>
+      <p class="lead">
+        Intr prescribes the weight for your next set, reads the trend across weeks instead of
+        judging you on a single day, and rebuilds your plan when life gets in the way.
+        Every decision comes with the reasoning behind it — drawn from your own numbers.
+        It's live today in early access — the core works now, and it's still being built in the open.
+      </p>
+      <div class="hero-ctas">
+        <!-- PLAY_LINK -->
+        <a class="btn btn-primary" href="https://play.google.com/store/apps/details?id=com.intr.app" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3.6 2.2a1 1 0 0 0-.5.9v17.8a1 1 0 0 0 .5.9l9.6-9.8L3.6 2.2Zm11 8.1 2.6-2.7-8.9-5a1 1 0 0 0-.4-.1l6.7 7.8Zm0 3.4-6.7 7.8c.14 0 .28-.04.4-.11l8.9-5-2.6-2.7Zm5.9-3.1-2.3-1.3-2.9 3 2.9 3 2.3-1.3a1.6 1.6 0 0 0 0-3.4Z"/></svg>
+          Get it on Google Play
+        </a>
+        <a class="btn btn-ghost" href="#how">See how it works</a>
       </div>
-      <div class="card coral">
-        <div class="dot"></div>
-        <h3>Explains every decision</h3>
-        <p>Every weight comes with the reasoning behind it, drawn from your own numbers. You don't just follow the plan — you understand it, and learn as you lift.</p>
-      </div>
-      <div class="card amber">
-        <div class="dot"></div>
-        <h3>No guilt, no gimmicks</h3>
-        <p>Miss a week and Intr rebuilds your plan from where you actually are. No broken streaks, no badges, no manipulation. Just calm, clear training.</p>
+      <div class="hero-note">
+        <b>Free to train — no paywall on the core app</b>
+        <span class="dotsep"></span> No ads
+        <span class="dotsep"></span> No data selling
+        <span class="dotsep"></span> iPhone in development
       </div>
     </div>
-  </section>
 
-  <section class="section">
-    <div class="kicker">What Intr will never do</div>
-    <h2 class="h2">Built to respect you.</h2>
-    <div class="principles">
-      <div class="principle teal"><div class="p-t">No ads</div><div class="p-d">Ever.</div></div>
-      <div class="principle coral"><div class="p-t">No data selling</div><div class="p-d">Your training is never the product.</div></div>
-      <div class="principle amber"><div class="p-t">Free to train</div><div class="p-d">The core experience, no paywall.</div></div>
+    <div class="hero-phone reveal" style="--d:140ms">
+      <div class="chip k1"><i></i> Coach's Call: 15 kg</div>
+      <div class="chip k2"><i></i> Recovering well · 89</div>
+      <div class="chip k3"><i></i> Deadlift PR detected</div>
+      <!-- Parallax layer wraps the float layer so scroll-translate and the
+           idle float animation never share a transform. -->
+      <div class="phone-par" data-parallax="0.16">
+        <div class="phone phone-float">
+          <img src="screens/01-dashboard-600.webp"
+               srcset="screens/01-dashboard-300.webp 300w, screens/01-dashboard-600.webp 600w, screens/01-dashboard-900.webp 900w"
+               sizes="282px" width="1080" height="2211"
+               alt="Intr dashboard showing a coach message about the deadlift climbing, today's Arms session, and a recovery card" loading="eager" fetchpriority="high">
+        </div>
+      </div>
     </div>
-  </section>
 
-  <footer>
-    <div class="foot-links">
-      <a href="privacy-policy.html">Privacy Policy</a>
-      <a href="terms-of-use.html">Terms of Use</a>
-      <a href="account-deletion.html">Account &amp; Data Deletion</a>
+  </div>
+</section>
+
+<!-- ═══ STATS ═════════════════════════════════════════════════════ -->
+<section class="wrap" style="padding-top:40px">
+  <div class="stats reveal">
+    <div class="stat"><div class="n" data-count="104">0</div><div class="l">Exercises, each with a video demo and muscle breakdown</div></div>
+    <div class="stat"><div class="n" data-count="4">0</div><div class="l">Splits, assigned automatically from the days you train</div></div>
+    <div class="stat"><div class="n" data-count="3" data-suffix=" wk">0</div><div class="l">Rolling window the coach reads before it changes anything</div></div>
+    <div class="stat"><div class="n" data-count="0">0</div><div class="l">Ads, trackers sold, or streaks that punish you</div></div>
+  </div>
+</section>
+
+<!-- ═══ PROBLEM ═══════════════════════════════════════════════════ -->
+<section class="section wrap">
+  <div class="head center reveal">
+    <div class="eyebrow c">The problem</div>
+    <h2>Training apps fail in two directions.</h2>
+    <p>Both of them end the same way — you stop opening the app, and you blame yourself for it.</p>
+  </div>
+
+  <div class="grid2" style="margin-top:52px">
+    <div class="card tint-c reveal">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4h16v16H4z"/><path d="M9 9h6M9 15h6"/></svg></div>
+      <h3>The rigid spreadsheet</h3>
+      <p>A fixed program that has no idea what happened in your last four sessions. It tells you to
+      squat heavy on four hours of sleep and calls it discipline. When the plan and your body
+      disagree, the plan wins — every time, because it can't see you.</p>
     </div>
-    <strong style="color:var(--muted);font-family:'Syne',sans-serif">Intr</strong> — a coach in your pocket.<br>
-    &copy; 2026 Omar Labidi &middot; <a href="mailto:labidiomar04@gmail.com">labidiomar04@gmail.com</a>
-  </footer>
+    <div class="card tint-a reveal" style="--d:110ms">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg></div>
+      <h3>The slot machine</h3>
+      <p>Streaks, badges, broken-chain shame, a push notification engineered to make you feel bad at
+      9pm. It's very good at making you open the app and very bad at making you stronger.
+      Miss a week and the product's answer is guilt.</p>
+    </div>
+  </div>
+</section>
 
-</div>
+<!-- ═══ WHO IT'S FOR ══════════════════════════════════════════════ -->
+<section class="section wrap" id="who">
+  <div class="head center reveal">
+    <div class="eyebrow">Who it's for</div>
+    <h2>Built for lifters, not spreadsheets.</h2>
+    <p>If you train with weights and want the reasoning behind every number, Intr fits —
+    wherever you're starting from.</p>
+  </div>
+
+  <div class="grid3" style="margin-top:52px">
+    <div class="card tint-b reveal">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V7"/><path d="M5 12l7-7 7 7"/></svg></div>
+      <h3>Beginners who want a real plan</h3>
+      <p>You don't need to know what a mesocycle is. Answer a few questions and Intr picks the
+      split, the exercises, and the starting weights — then explains each choice as you go.</p>
+    </div>
+    <div class="card tint-c reveal" style="--d:110ms">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M17 7h4v4"/></svg></div>
+      <h3>Intermediates done guessing</h3>
+      <p>You know how to train, but you're tired of picking weights by feel. Intr prescribes the
+      number, reads the trend across weeks, and adjusts before you stall.</p>
+    </div>
+    <div class="card tint-a reveal" style="--d:220ms">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg></div>
+      <h3>Anyone whose life gets in the way</h3>
+      <p>Gym or home, six days or two, a clean month or a missed week — the plan reshapes around
+      what actually happened instead of guilting you for it.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ HOW IT WORKS ══════════════════════════════════════════════ -->
+<section class="section wrap" id="how">
+  <div class="head center reveal">
+    <div class="eyebrow">How it works</div>
+    <h2>One loop, running quietly under everything.</h2>
+    <p>Nothing in Intr is a black box. Every number it gives you can be traced back to
+    a set you actually logged.</p>
+  </div>
+
+  <div class="loop" style="margin-top:56px">
+    <div class="step reveal">
+      <div class="bar"></div>
+      <div class="num">STEP 01</div>
+      <h3>You log the set, and how it felt</h3>
+      <p>Weight, reps, and one tap: <em>Failed · Hard · Solid · Easy</em>. That last tap is reps left
+      in reserve — one of the most useful signals in autoregulated training, and one most
+      apps never bother to collect.</p>
+    </div>
+    <div class="step reveal" style="--d:120ms">
+      <div class="bar"></div>
+      <div class="num">STEP 02</div>
+      <h3>The coach does the arithmetic</h3>
+      <p>Load progression, per-lift strength trend, adherence, energy, and where you sit in your
+      mesocycle. It's deterministic, unit-tested code — not a language model guessing at your
+      squat. Same inputs, same answer, every time.</p>
+    </div>
+    <div class="step reveal" style="--d:240ms">
+      <div class="bar"></div>
+      <div class="num">STEP 03</div>
+      <h3>Tomorrow's session changes</h3>
+      <p>The weight on the bar, the volume in the week, whether you deload — all move to match what
+      the data says. And it tells you which of your numbers moved it, in a sentence you can argue
+      with.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ VIDEO ═════════════════════════════════════════════════════ -->
+<section class="section wrap" id="demo" style="padding-top:20px">
+  <div class="head center reveal">
+    <div class="eyebrow">See it run</div>
+    <h2>One take, start to finish.</h2>
+    <p>No cuts, no mockups, no sped-up footage. Open the app, start the session,
+    log the sets, finish — the whole loop in under two minutes.</p>
+  </div>
+
+  <div class="video-shell reveal" style="margin-top:48px">
+    <div class="video-frame">
+      <!-- Facade. The YouTube iframe is injected on click, so no player
+           script and no cookies load unless the visitor asks for them. -->
+      <button class="video-facade" id="video-play" type="button"
+              aria-label="Play the Intr demo video, 1 minute 42 seconds">
+        <!-- maxresdefault 404s for this upload, so fall back to hqdefault
+             (always present) the moment the hi-res poster fails to load. -->
+        <img src="https://i.ytimg.com/vi/dknC8KqTD-w/maxresdefault.jpg"
+             onerror="this.onerror=null;this.src='https://i.ytimg.com/vi/dknC8KqTD-w/hqdefault.jpg'"
+             alt="" width="1280" height="720" loading="lazy" decoding="async" fetchpriority="low">
+        <span class="play-btn" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        </span>
+        <span class="video-meta">
+          <span class="t">Intr — a full session, unedited</span>
+          <span class="d">1:42</span>
+        </span>
+      </button>
+    </div>
+    <p class="video-note">
+      Nothing loads from YouTube until you press play.
+      <a href="https://www.youtube.com/watch?v=dknC8KqTD-w" target="_blank" rel="noopener">Watch on YouTube instead</a>
+    </p>
+  </div>
+</section>
+
+<!-- ═══ FEATURE DEEP DIVES ════════════════════════════════════════ -->
+<section id="features" class="wrap" style="padding-top:60px">
+  <div class="head center reveal" style="margin-bottom:20px">
+    <div class="eyebrow a">Inside the app</div>
+    <h2>Five things it does that most training apps don't.</h2>
+    <p>Every screen below is a real capture from the build on Google Play.</p>
+  </div>
+
+  <!-- 1 · Coach's Call -->
+  <div class="frow">
+    <div class="fcopy reveal">
+      <div class="eyebrow">01 — Coach's Call</div>
+      <h3>It tells you how heavy to go. And why.</h3>
+      <p>Open any exercise and the weight is already chosen — <strong>a specific number, not a rep
+      range and a shrug</strong>. Under it sits the reasoning, written from your own history:
+      what you lifted last time, what you left in the tank, and what that means for today.</p>
+      <p>The maths is APRE-style autoregulation. Leave reps in reserve and the load climbs. Hit
+      true failure and it holds or backs off. Report low energy and it can only pull the number
+      <em>down</em> — never up, because a good mood is not a reason to add weight.</p>
+      <ul class="flist">
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Goal-aware ladders — strength, muscle, or general each progress differently</li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Reps climb inside the band before the bar gets heavier</li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Every prescription is overridable — it's advice, not a lock</li>
+      </ul>
+      <div class="quote">
+        “15 kg — same as last. You had more last time; match 15 kg and earn an extra rep.”
+        <span>Real Coach's Call output</span>
+      </div>
+    </div>
+    <div class="reveal" style="--d:120ms">
+      <div class="phone"><img src="screens/02-coachs-call-600.webp"
+             srcset="screens/02-coachs-call-300.webp 300w, screens/02-coachs-call-600.webp 600w, screens/02-coachs-call-900.webp 900w"
+             sizes="282px" width="1080" height="2211" loading="lazy" decoding="async"
+        alt="Barbell Curl exercise screen with a Coach's Call card prescribing 15 kg and explaining the reasoning"></div>
+    </div>
+  </div>
+
+  <!-- 2 · Set rating -->
+  <div class="frow flip c">
+    <div class="fcopy reveal">
+      <div class="eyebrow c">02 — Effort capture</div>
+      <h3>Four words, and the whole engine has what it needs.</h3>
+      <p>After each set: <strong>How hard was that set?</strong> Failed, Hard, Solid, Easy — mapped
+      to reps in reserve. It takes under a second, and it's the input that separates a logbook
+      from a coach.</p>
+      <p>Weight adjustment is right there too: −2.5, same, +2.5, +5, or type your own. No fiddling
+      with a keyboard mid-rest. And if you'd rather not rate it, <strong>“Log without rating”</strong>
+      is always there — the app degrades to a plain logbook rather than nagging you.</p>
+      <ul class="flist">
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Full-screen rest timer with a countdown ring between sets</li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Swap any exercise mid-session — it sticks for every future day of that type</li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> PRs detected and surfaced the moment you finish</li>
+      </ul>
+    </div>
+    <div class="reveal" style="--d:120ms">
+      <div class="phone"><img src="screens/06-set-rating-600.webp"
+             srcset="screens/06-set-rating-300.webp 300w, screens/06-set-rating-600.webp 600w, screens/06-set-rating-900.webp 900w"
+             sizes="282px" width="1080" height="2211" loading="lazy" decoding="async"
+        alt="Set logging sheet asking how hard the set was, with Failed, Hard, Solid and Easy options"></div>
+    </div>
+  </div>
+
+  <!-- 3 · Training status -->
+  <div class="frow g">
+    <div class="fcopy reveal">
+      <div class="eyebrow" style="color:var(--green)">03 — Training Status</div>
+      <h3>It reads the trend. Not the day you had.</h3>
+      <p>Most “readiness” scores punish you for training hard yesterday. Intr's can't — by
+      construction, it has <strong>no same-day input at all</strong>. It looks at a rolling
+      two-to-three week window: strength delta per lift, adherence, repeated low energy,
+      repeated missed effort targets.</p>
+      <p>Every fatigue signal needs to happen <em>twice</em> before it counts. One rough session is
+      just a rough session. And the read is never a mystery number — it names the inputs that
+      produced it.</p>
+      <ul class="flist">
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> 🟢 Recovering well · 🟡 Holding steady · 🔴 Backing off</li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Trending strong? Offers to <strong>skip</strong> the scheduled week-4 deload</li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Trending down? Offers to pull a deload <strong>early</strong></li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Both are a tap you accept. Nothing rewrites your plan behind your back</li>
+      </ul>
+      <div class="quote">
+        “Lifts are trending up and energy's steady — well recovered.”
+        <span>Real Training Status read</span>
+      </div>
+    </div>
+    <div class="reveal" style="--d:120ms">
+      <div class="phone"><img src="screens/04-recovery-skip-deload-600.webp"
+             srcset="screens/04-recovery-skip-deload-300.webp 300w, screens/04-recovery-skip-deload-600.webp 600w, screens/04-recovery-skip-deload-900.webp 900w"
+             sizes="282px" width="1080" height="2211" loading="lazy" decoding="async"
+        alt="Dashboard recovery card reading 89, recovering well, offering to skip the scheduled deload"></div>
+    </div>
+  </div>
+
+  <!-- 4 · Gap recovery -->
+  <div class="frow flip a">
+    <div class="fcopy reveal">
+      <div class="eyebrow a">04 — Coming back</div>
+      <h3>Miss a week and you get a plan, not a guilt screen.</h3>
+      <p>Life happens. When you come back after a gap, Intr counts what you actually missed and
+      offers you two real choices: <strong>make up the backlog back-to-back</strong>, or
+      <strong>skip ahead and stay on schedule</strong>. Either way, today is a session.</p>
+      <p>Resuming isn't a naive shift. It regenerates your plan from your true position in the
+      rotation — a missed legs day continues to push, not back to chest — using the same generator
+      that built the plan in the first place. No orphaned days, no drift.</p>
+      <ul class="flist">
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Nothing is lost, nothing is shamed, no chain to break</li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Recovery sessions count toward consistency — resting isn't a failure</li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> A corrupted or stale week self-heals to the canonical plan on next open</li>
+      </ul>
+    </div>
+    <div class="reveal" style="--d:120ms">
+      <div class="phone"><img src="screens/05-gap-recovery-600.webp"
+             srcset="screens/05-gap-recovery-300.webp 300w, screens/05-gap-recovery-600.webp 600w, screens/05-gap-recovery-900.webp 900w"
+             sizes="282px" width="1080" height="2211" loading="lazy" decoding="async"
+        alt="Welcome back modal reading you missed 26 days of training, offering pick up where I left off or skip ahead"></div>
+    </div>
+  </div>
+
+  <!-- 5 · Learn as you lift -->
+  <div class="frow">
+    <div class="fcopy reveal">
+      <div class="eyebrow">05 — Learn as you lift</div>
+      <h3>You should leave knowing more than your total.</h3>
+      <p>Tap <strong>Muscles worked</strong> on any exercise and you get an anatomical figure with
+      the working region lit up, plus a plain-English explanation of what that muscle actually
+      does — and why this movement hits it the way it does.</p>
+      <p>The catalog carries 104 exercises, each with a video demonstration, equipment, difficulty,
+      and sub-region emphasis where it matters — upper chest versus lower, rear delts versus side.
+      Home and gym are both first-class: tell Intr where you're training and the selection changes.</p>
+      <ul class="flist">
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> A video demo on every exercise in the catalog</li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Primary movers highlighted per movement, not per body part</li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Written for lifters, not copied out of a textbook</li>
+      </ul>
+    </div>
+    <div class="reveal" style="--d:120ms">
+      <div class="phone"><img src="screens/03-muscles-worked-600.webp"
+             srcset="screens/03-muscles-worked-300.webp 300w, screens/03-muscles-worked-600.webp 600w, screens/03-muscles-worked-900.webp 900w"
+             sizes="282px" width="1080" height="2211" loading="lazy" decoding="async"
+        alt="Muscles worked sheet showing an anatomical figure with the biceps highlighted and a plain-English description"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ EVERYTHING ELSE ═══════════════════════════════════════════ -->
+<section class="section wrap">
+  <div class="head center reveal">
+    <div class="eyebrow m">And the rest of it</div>
+    <h2>The parts you only notice when they're missing.</h2>
+  </div>
+
+  <div class="grid3" style="margin-top:52px">
+    <div class="card tint-b reveal">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M2 12h20"/><circle cx="12" cy="12" r="9"/></svg></div>
+      <h3>Works with no signal</h3>
+      <p>Your plan lives on the device and reads from there first. Basement gyms, aeroplanes, dead
+      Wi-Fi — the session runs. Sync catches up when the network does, and a failed sync never
+      loses a logged set.</p>
+    </div>
+    <div class="card tint-c reveal" style="--d:80ms">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3 21 7l-4 4M21 7H8M7 21l-4-4 4-4M3 17h13"/></svg></div>
+      <h3>Swaps that stick</h3>
+      <p>Bench press bench taken? Swap it. Intr rewrites every upcoming day of that type with your
+      choice, carries the right set count, and quietly expires the swap at the next training block
+      so you're not stuck with it forever.</p>
+    </div>
+    <div class="card tint-a reveal" style="--d:160ms">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 15 9l7 .6-5.3 4.6 1.6 6.8L12 17.4 5.7 21l1.6-6.8L2 9.6 9 9Z"/></svg></div>
+      <h3>PRs found for you</h3>
+      <p>Every personal record is detected automatically from your logged sets — including
+      first-time lifts — and surfaced the moment you finish. Prehab and recovery work is excluded,
+      so a 5 kg warm-up never masquerades as a milestone.</p>
+    </div>
+    <div class="card tint-g reveal">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg></div>
+      <h3>A split you didn't have to pick</h3>
+      <p>Tell Intr how many days you can train and it assigns the right structure — full body,
+      upper/lower, push-pull-legs, or a bro split. Change your schedule and it re-derives.
+      No programme shopping, no forum arguments.</p>
+    </div>
+    <div class="card tint-b reveal" style="--d:80ms">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h5"/></svg></div>
+      <h3>A journal that gets read</h3>
+      <p>Log how a session felt, what hurt, what clicked. It isn't a diary that disappears — the
+      coach draws on it, and a nightly reflection prompt gives you something specific to answer
+      instead of a blank box.</p>
+    </div>
+    <div class="card tint-c reveal" style="--d:160ms">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 1 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></svg></div>
+      <h3>Notifications you asked for</h3>
+      <p>One reminder, at a time you choose, only if you turn it on. It's cancelled the second you
+      finish training. No streak-anxiety pings, no re-engagement campaigns, no 9pm guilt.</p>
+    </div>
+    <div class="card tint-a reveal">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-6 4 4 5-7 4 5"/><path d="M3 21h18"/></svg></div>
+      <h3>Progress you can actually see</h3>
+      <p>Per-lift strength trends, volume by muscle group, session history with every set you've
+      ever logged. The Progress and History tabs are the receipts behind every claim the coach
+      makes.</p>
+    </div>
+    <div class="card tint-g reveal" style="--d:80ms">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-4.4-9.3-9A5.3 5.3 0 0 1 12 6.7 5.3 5.3 0 0 1 21.3 12C19 16.6 12 21 12 21Z"/></svg></div>
+      <h3>Recovery sessions that count</h3>
+      <p>Mobility and prehab days are real sessions in Intr. They count toward consistency but are
+      invisible to load progression and PR detection — so resting properly never drags your
+      numbers down.</p>
+    </div>
+    <div class="card tint-b reveal" style="--d:160ms">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M5 8l7-5 7 5M5 16l7 5 7-5"/></svg></div>
+      <h3>Blocks, not endless weeks</h3>
+      <p>Training is organised into mesocycles with a built-in deload week, and your primary
+      compounds stay fixed across a block so progression has something stable to measure. Variety
+      lives in the accessories, where it belongs.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ PRINCIPLES ════════════════════════════════════════════════ -->
+<section class="section wrap" id="principles">
+  <div class="head center reveal">
+    <div class="eyebrow c">What Intr will never do</div>
+    <h2>Built to respect you.</h2>
+    <p>These aren't aspirations. They're constraints — the kind that are easy to keep now
+    and expensive to break later, which is exactly why they're written down.</p>
+  </div>
+
+  <div class="principles reveal" style="margin-top:52px">
+    <div class="pr"><div class="t">No ads</div><div class="d">Not now, not at scale, not as a “free tier”. There is no advertising surface in Intr.</div></div>
+    <div class="pr"><div class="t">No data selling</div><div class="d">Your training history is never the product. It isn't brokered, bundled, or sold — to anyone.</div></div>
+    <div class="pr"><div class="t">Free to train</div><div class="d">The core experience has no paywall. Planning, logging, coaching, history — free.</div></div>
+    <div class="pr"><div class="t">No guilt mechanics</div><div class="d">No badges, no leaderboards, nothing that punishes you for stopping. Recovery days count.</div></div>
+  </div>
+
+  <div class="card reveal" style="margin-top:20px;padding:32px 30px">
+    <h3 style="margin-bottom:12px">One honest footnote</h3>
+    <p style="font-size:16px">There <em>is</em> a consistency streak on the dashboard, and it's worth being precise about what
+    it is: recovery days count toward it, it never punishes you when it ends, and the single
+    reminder it can send is off unless you turn it on. It's a count of your work, not a chain
+    you're afraid to break. Naming that seemed better than pretending it wasn't there.</p>
+  </div>
+</section>
+
+<!-- ═══ ROADMAP ═══════════════════════════════════════════════════ -->
+<section class="section wrap" id="roadmap">
+  <div class="head center reveal">
+    <div class="eyebrow a">Where this is going</div>
+    <h2>Shipped, next, and later.</h2>
+    <p>Intr is built by one person, <a href="https://github.com/Labidi0omar/intr" target="_blank" rel="noopener">in the open</a>. Here's the honest state of it.</p>
+  </div>
+
+  <div class="road reveal" style="margin-top:52px">
+    <div class="ritem">
+      <div><span class="rtag live">● Shipped</span></div>
+      <div class="rbody">
+        <h3>The Android app, and the whole training engine</h3>
+        <p>Adaptive plan generation, Coach's Call load prescription, Training Status with
+        tap-to-accept deloads, gap recovery, exercise swaps, PR detection, journal, offline-first
+        sync. Live on Google Play today — a real, working build you can install now, not a mockup.
+        It's early and still rough in places, and it's getting sharper with every release.</p>
+      </div>
+    </div>
+    <div class="ritem">
+      <div><span class="rtag next">◆ In development</span></div>
+      <div class="rbody">
+        <h3>Intr for iPhone</h3>
+        <p>The most requested thing since launch. A full native-quality iOS release built on the
+        same cross-platform foundation — the complete training engine, not a cut-down port —
+        with a TestFlight beta before general release.</p>
+      </div>
+    </div>
+    <div class="ritem">
+      <div><span class="rtag next">◆ In development</span></div>
+      <div class="rbody">
+        <h3>Estimated 1RM curves</h3>
+        <p>The progress is already buried in your logged sets. This surfaces it: every lift plotted
+        over time with an estimated one-rep-max curve, so you can see the slope rather than
+        infer it.</p>
+      </div>
+    </div>
+    <div class="ritem">
+      <div><span class="rtag later">◇ Planned</span></div>
+      <div class="rbody">
+        <h3>Apple Health &amp; wearables</h3>
+        <p>Today Intr reads your multi-week trend but has no same-day signal — deliberately, because
+        self-reported energy is noisy. Sleep and HRV patch that blind spot honestly, as an
+        additional input that can prescribe lighter today, never as the only voice in the room.</p>
+      </div>
+    </div>
+    <div class="ritem">
+      <div><span class="rtag later">◇ Planned</span></div>
+      <div class="rbody">
+        <h3>Shared training plans</h3>
+        <p>Train the same plan as a friend and stay in sync even when one of you misses days.
+        Accountability from a person who knows you — not a leaderboard of strangers.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Compact changelog — pairs with the roadmap and reinforces "actively built,
+       still early" rather than "finished". Entries reflect real shipped work. -->
+  <details class="q reveal" style="margin-top:26px">
+    <summary>What's shipped recently</summary>
+    <div class="ans">
+      <ul style="margin:0;padding-left:18px;display:grid;gap:11px">
+        <li><strong>v1.1</strong> — purchases updated to meet Google Play's latest billing-SDK requirements.</li>
+        <li><strong>Onboarding</strong> — rebuilt with smoother animation, unified plan-selection cards, and a bro-split option.</li>
+        <li><strong>Workout flow</strong> — full-screen rest timer with a countdown ring, a gold PR list, and a muscles-worked reveal at the finish.</li>
+        <li><strong>This site</strong> — legal moved to the footer, a permanent contributors page, and clearer early-access framing.</li>
+      </ul>
+    </div>
+  </details>
+</section>
+
+<!-- ═══ FAQ ═══════════════════════════════════════════════════════ -->
+<section class="section wrap" id="faq">
+  <div class="head center reveal">
+    <div class="eyebrow m">Questions</div>
+    <h2>The things people actually ask.</h2>
+  </div>
+
+  <div class="faq" style="margin-top:48px">
+    <details class="q reveal">
+      <summary>Is it really free?</summary>
+      <div class="ans">Yes. Planning, logging, the coach, your full history — the core experience has
+      no paywall and no ads. If a paid tier exists in future it will fund development, not hold
+      your training hostage.</div>
+    </details>
+    <details class="q reveal">
+      <summary>Is there an iPhone version?</summary>
+      <div class="ans">Not yet — Intr is on Android today, and iOS is actively in development on the
+      same cross-platform codebase. See the <a href="#roadmap">roadmap</a> for where it sits.</div>
+    </details>
+    <details class="q reveal">
+      <summary>Do I need to be experienced to use it?</summary>
+      <div class="ans">No. You answer a few questions in onboarding — days per week, goal, gym or
+      home, experience — and Intr builds the split, picks the exercises, and sets the starting
+      loads. It gets more useful the more you log, but it's useful on day one.</div>
+    </details>
+    <details class="q reveal">
+      <summary>Can I change what it gives me?</summary>
+      <div class="ans">All of it. Swap any exercise, override any prescribed weight, decline any
+      deload offer, edit your schedule. Intr is opinionated on purpose, but nothing it decides is
+      locked — and it learns from what you actually do rather than what it told you to do.</div>
+    </details>
+    <details class="q reveal">
+      <summary>Is it an AI app?</summary>
+      <div class="ans">Partly, and specifically. The load maths, trend reads, deload logic, and plan
+      generation are deterministic, unit-tested code — because arithmetic about your squat should
+      give the same answer twice. AI is used where language is the job: writing the coach's
+      observations in readable English. The numbers never come from a guess.</div>
+    </details>
+    <details class="q reveal">
+      <summary>What happens to my data?</summary>
+      <div class="ans">It's yours. Every table is protected by row-level security so only your
+      account can read your rows, nothing is sold or brokered, and you can delete your account and
+      all its data from inside the app at any time — see
+      <a href="account-deletion.html">Account &amp; Data Deletion</a> and the
+      <a href="privacy-policy.html">Privacy Policy</a>.</div>
+    </details>
+    <details class="q reveal">
+      <summary>Who builds this?</summary>
+      <div class="ans">One developer — Omar Labidi — who got tired of black-box training apps that
+      hand you numbers and expect obedience. If you have a bug, an idea, or a disagreement,
+      <a href="mailto:labidiomar04@gmail.com">the email address goes to a real inbox</a>.</div>
+    </details>
+  </div>
+</section>
+
+<!-- ═══ FINAL CTA ═════════════════════════════════════════════════ -->
+<section class="wrap" style="padding:20px 24px 0">
+  <div class="finale reveal">
+    <h2>Train with something that explains itself.</h2>
+    <p>Free on Android. No ads, no data selling, no streak you're scared to break.
+    Just a coach that shows its work.</p>
+    <div class="hero-ctas">
+      <!-- PLAY_LINK -->
+      <a class="btn btn-primary" href="https://play.google.com/store/apps/details?id=com.intr.app" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3.6 2.2a1 1 0 0 0-.5.9v17.8a1 1 0 0 0 .5.9l9.6-9.8L3.6 2.2Zm11 8.1 2.6-2.7-8.9-5a1 1 0 0 0-.4-.1l6.7 7.8Zm0 3.4-6.7 7.8c.14 0 .28-.04.4-.11l8.9-5-2.6-2.7Zm5.9-3.1-2.3-1.3-2.9 3 2.9 3 2.3-1.3a1.6 1.6 0 0 0 0-3.4Z"/></svg>
+        Get it on Google Play
+      </a>
+      <a class="btn btn-ghost" href="contributors.html">Meet the contributors</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ═══ FOOTER ════════════════════════════════════════════════════ -->
+<footer>
+  <div class="wrap">
+    <h2 class="sr-only">Intr footer</h2>
+    <div class="fgrid">
+      <div class="fbrand">
+        <a href="#top" class="logo">INTR</a>
+        <p>A coach in your pocket. Adaptive strength training that reads your real numbers,
+        explains every decision, and never guilts you into a session.</p>
+      </div>
+      <div class="fcol">
+        <h3>Product</h3>
+        <a href="#how">How it works</a>
+        <a href="#features">Features</a>
+        <a href="#roadmap">Roadmap</a>
+        <a href="#faq">FAQ</a>
+      </div>
+      <div class="fcol">
+        <h3>Get Intr</h3>
+        <!-- PLAY_LINK -->
+        <a href="https://play.google.com/store/apps/details?id=com.intr.app" target="_blank" rel="noopener">Google Play</a>
+        <span>iPhone — in development</span>
+        <a href="contributors.html">Contributors</a>
+        <a href="https://github.com/Labidi0omar/intr" target="_blank" rel="noopener">Source on GitHub</a>
+      </div>
+      <div class="fcol">
+        <h3>Legal</h3>
+        <a href="privacy-policy.html">Privacy Policy</a>
+        <a href="terms-of-use.html">Terms of Use</a>
+        <a href="account-deletion.html">Account &amp; Data Deletion</a>
+        <a href="mailto:labidiomar04@gmail.com">Contact</a>
+      </div>
+    </div>
+    <div class="fbot">
+      <div>&copy; 2026 Omar Labidi. All rights reserved.</div>
+      <div><a href="mailto:labidiomar04@gmail.com">labidiomar04@gmail.com</a></div>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  /* If anything below throws, the reveal animation would leave the page as an
+     empty shell. Reveal everything first, then let the enhancements run. */
+  function revealAll(){
+    document.querySelectorAll('.reveal').forEach(function(el){ el.classList.add('in'); });
+  }
+  window.addEventListener('error', revealAll);
+
+  try {
+
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ── Sticky nav state + scroll-linked parallax ─────────────── */
+  var nav = document.getElementById('nav');
+  var bar = document.getElementById('progress');
+  // Transform-only parallax the scroll handler drives. Limited to fine-pointer
+  // desktop widths: phones fire scroll events in bursts during momentum
+  // scrolling, which makes JS parallax stutter — there the element just rests
+  // (its idle float animation still plays). Off under reduced motion.
+  var canParallax = !reduced &&
+    window.matchMedia('(min-width: 941px) and (pointer: fine)').matches;
+  var parItems = canParallax ? [].slice.call(document.querySelectorAll('[data-parallax]')) : [];
+  function parallax(){
+    var vh = window.innerHeight || document.documentElement.clientHeight;
+    for (var i = 0; i < parItems.length; i++){
+      var el = parItems[i];
+      var r = el.getBoundingClientRect();
+      // 0 when the element's centre sits at the viewport centre; ±1 near edges.
+      var frac = (r.top + r.height / 2 - vh / 2) / vh;
+      var speed = parseFloat(el.getAttribute('data-parallax')) || 0.1;
+      el.style.transform = 'translate3d(0,' + (frac * speed * -140).toFixed(1) + 'px,0)';
+    }
+  }
+  var ticking = false;
+  function onScroll(){
+    var y = window.scrollY || document.documentElement.scrollTop;
+    nav.classList.toggle('stuck', y > 12);
+    var max = document.documentElement.scrollHeight - window.innerHeight;
+    bar.style.transform = 'scaleX(' + (max > 0 ? y / max : 0) + ')';
+    parallax();
+    ticking = false;
+  }
+  window.addEventListener('scroll', function(){
+    if (!ticking){ ticking = true; requestAnimationFrame(onScroll); }
+  }, {passive:true});
+  window.addEventListener('resize', parallax, {passive:true});
+  onScroll();
+
+  /* ── Reveal on scroll ──────────────────────────────────────── */
+  var items = document.querySelectorAll('.reveal');
+  if (reduced || !('IntersectionObserver' in window)) {
+    items.forEach(function(el){ el.classList.add('in'); });
+  } else {
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if (e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); }
+      });
+    }, {rootMargin:'0px 0px -8% 0px', threshold:0.08});
+    items.forEach(function(el){ io.observe(el); });
+  }
+
+  /* ── Stat count-up ─────────────────────────────────────────── */
+  var nums = document.querySelectorAll('[data-count]');
+  function countUp(el){
+    var target = parseFloat(el.dataset.count);
+    var suffix = el.dataset.suffix || '';
+    if (reduced || target === 0){ el.textContent = target + suffix; return; }
+    var start = performance.now(), dur = 1300;
+    (function tick(now){
+      var p = Math.min((now - start) / dur, 1);
+      var eased = 1 - Math.pow(1 - p, 3);
+      el.textContent = Math.round(target * eased) + suffix;
+      if (p < 1) requestAnimationFrame(tick);
+    })(start);
+  }
+  if (!('IntersectionObserver' in window)) {
+    nums.forEach(function(el){ el.textContent = el.dataset.count + (el.dataset.suffix || ''); });
+  } else {
+    var io2 = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if (e.isIntersecting){ countUp(e.target); io2.unobserve(e.target); }
+      });
+    }, {threshold:0.5});
+    nums.forEach(function(el){ io2.observe(el); });
+  }
+
+  /* ── Pointer spotlight on cards ────────────────────────────── */
+  if (!reduced && window.matchMedia('(hover: hover)').matches) {
+    document.querySelectorAll('.card').forEach(function(card){
+      card.addEventListener('pointermove', function(ev){
+        var r = card.getBoundingClientRect();
+        card.style.setProperty('--mx', (ev.clientX - r.left) + 'px');
+        card.style.setProperty('--my', (ev.clientY - r.top) + 'px');
+      });
+    });
+  }
+
+  /* ── Aurora: stop compositing once it's off screen ─────────── */
+  /* Three fixed 90px-blur layers animating forever is real GPU and battery
+     cost on a phone, and none of it is visible past the first screen. */
+  var aurora = document.querySelector('.aurora');
+  var heroEl = document.getElementById('top');
+  if (aurora && heroEl && 'IntersectionObserver' in window) {
+    new IntersectionObserver(function(entries){
+      aurora.classList.toggle('paused', !entries[0].isIntersecting);
+    }, {threshold:0}).observe(heroEl);
+  }
+
+  /* ── Mobile menu ───────────────────────────────────────────── */
+  var burger = document.getElementById('burger');
+  var menu = document.getElementById('mobile-menu');
+  var menuInner = menu.querySelector('.wrap');
+  function setMenu(open){
+    menu.classList.toggle('open', open);
+    menu.style.maxHeight = open ? menuInner.scrollHeight + 'px' : '0px';
+    burger.setAttribute('aria-expanded', String(open));
+    burger.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+  }
+  burger.addEventListener('click', function(){
+    setMenu(burger.getAttribute('aria-expanded') !== 'true');
+  });
+  menu.addEventListener('click', function(e){
+    if (e.target.tagName === 'A') setMenu(false);
+  });
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape' && burger.getAttribute('aria-expanded') === 'true'){
+      setMenu(false); burger.focus();
+    }
+  });
+  // A resize past the breakpoint leaves the panel open but hidden; reset it.
+  window.addEventListener('resize', function(){
+    if (window.innerWidth > 900) setMenu(false);
+  });
+
+  /* ── Scroll-spy: mark the section currently in view ─────────── */
+  var spied = ['how','features','principles','roadmap','faq'];
+  var linkFor = {};
+  spied.forEach(function(id){
+    var a = document.querySelector('.nav-links a[href="#' + id + '"]');
+    if (a) linkFor[id] = a;
+  });
+  if ('IntersectionObserver' in window) {
+    var visible = {};
+    var spy = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){ visible[e.target.id] = e.isIntersecting; });
+      var active = null;
+      spied.forEach(function(id){ if (visible[id] && !active) active = id; });
+      spied.forEach(function(id){
+        if (!linkFor[id]) return;
+        // Remove rather than set "false" — an absent attribute is the correct
+        // way to say "not current", and it keeps the a11y tree quiet.
+        if (id === active) linkFor[id].setAttribute('aria-current', 'true');
+        else linkFor[id].removeAttribute('aria-current');
+      });
+    }, {rootMargin:'-45% 0px -45% 0px'});
+    spied.forEach(function(id){
+      var el = document.getElementById(id);
+      if (el) spy.observe(el);
+    });
+  }
+
+  /* ── Video: swap the facade for the real player on click ───── */
+  var vplay = document.getElementById('video-play');
+  if (vplay) {
+    // Warm the YouTube connection the instant the visitor shows intent
+    // (hover / focus / touch) so playback starts noticeably faster on click.
+    var warmed = false;
+    function warmYouTube(){
+      if (warmed) return; warmed = true;
+      ['https://www.youtube-nocookie.com','https://www.google.com',
+       'https://googlevideo.com','https://static.doubleclick.net']
+        .forEach(function(href){
+          var l = document.createElement('link');
+          l.rel = 'preconnect'; l.href = href; l.crossOrigin = '';
+          document.head.appendChild(l);
+        });
+    }
+    vplay.addEventListener('pointerenter', warmYouTube, {once:true});
+    vplay.addEventListener('focus', warmYouTube, {once:true});
+    vplay.addEventListener('touchstart', warmYouTube, {once:true, passive:true});
+
+    vplay.addEventListener('click', function(){
+      var frame = document.createElement('iframe');
+      // nocookie host + autoplay, since the click IS the play intent.
+      frame.src = 'https://www.youtube-nocookie.com/embed/dknC8KqTD-w'
+                + '?autoplay=1&rel=0&modestbranding=1&playsinline=1&color=white';
+      frame.title = 'Intr — a full session, unedited';
+      frame.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
+      frame.referrerPolicy = 'strict-origin-when-cross-origin';
+      frame.allowFullscreen = true;
+      frame.loading = 'eager';
+      vplay.replaceWith(frame);
+      frame.focus();
+    });
+  }
+
+  } catch (err) {
+    revealAll();
+    throw err;
+  }
+})();
+</script>
 </body>
 </html>

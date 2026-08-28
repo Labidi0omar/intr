@@ -1,0 +1,325 @@
+/* ═══════════════════════════════════════════════════════════════════
+   Intr — shared site layer.
+
+   Loaded by every page (index, privacy-policy, terms-of-use,
+   account-deletion, contributors) so the whole site reads as one
+   product. Page-specific styling stays inline in each page.
+
+   Tokens mirror src/theme/index.ts. Do not drift them by eye.
+   ═══════════════════════════════════════════════════════════════ */
+
+:root{
+  --bg:#070708;
+  --panel:#0f0f11;
+  --panel-2:#131316;
+  --border:#1e1e22;
+  --border-lit:#2a2a30;
+  --text:#f5f5f6;
+  --dim:#c4c4cc;
+  --muted:#8a8a92;
+  /* Was #55555d, which measured 2.73:1 on --bg and failed WCAG AA.
+     #7c7c88 is 4.89:1 on --bg and 4.65:1 on --panel — passes on both
+     surfaces it actually gets used on. */
+  --faint:#7c7c88;
+
+  --blue:#0EA5E9;      /* accentTeal  — primary action */
+  --coral:#F43F5E;     /* accentCoral — energy / streak */
+  --amber:#F59E0B;     /* accentAmber — PRs / achievement */
+  --green:#22C55E;     /* positive    — recovering well */
+
+  --ease:cubic-bezier(.22,1,.36,1);
+  --maxw:1140px;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{
+  background:var(--bg);color:var(--text);
+  font-family:'DM Sans',system-ui,-apple-system,sans-serif;
+  font-size:17px;line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;position:relative;
+}
+img{max-width:100%;display:block}
+a{color:var(--blue);text-decoration:none}
+::selection{background:rgba(14,165,233,.3)}
+
+/* Keyboard focus. The browser default ring is near-invisible on this
+   background, and there are 30+ focusable elements on the page. */
+:focus-visible{outline:2px solid var(--blue);outline-offset:3px;border-radius:6px}
+.btn:focus-visible{outline-offset:4px}
+.skip{
+  position:absolute;left:24px;top:-100px;z-index:200;
+  padding:12px 20px;border-radius:11px;
+  background:var(--blue);color:#04222e;font-weight:600;
+  transition:top .22s var(--ease);
+}
+.skip:focus{top:14px}
+
+/* Visually hidden but available to screen readers — for landmark headings
+   (e.g. the footer) that shouldn't show but keep the heading order intact. */
+.sr-only{
+  position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+  clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0;
+}
+
+/* ── Ambient background ─────────────────────────────────────────── */
+.aurora{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
+.aurora span{position:absolute;border-radius:50%;filter:blur(90px);opacity:.5;will-change:transform}
+.aurora .a1{width:760px;height:620px;top:-300px;left:50%;margin-left:-380px;
+  background:radial-gradient(closest-side,rgba(14,165,233,.34),transparent 72%);
+  animation:drift1 26s var(--ease) infinite alternate}
+.aurora .a2{width:600px;height:520px;top:12%;right:-220px;
+  background:radial-gradient(closest-side,rgba(244,63,94,.20),transparent 72%);
+  animation:drift2 32s var(--ease) infinite alternate}
+.aurora .a3{width:640px;height:540px;top:56%;left:-240px;
+  background:radial-gradient(closest-side,rgba(245,158,11,.14),transparent 72%);
+  animation:drift3 38s var(--ease) infinite alternate}
+@keyframes drift1{to{transform:translate3d(-70px,60px,0) scale(1.12)}}
+@keyframes drift2{to{transform:translate3d(-110px,90px,0) scale(1.08)}}
+@keyframes drift3{to{transform:translate3d(90px,-70px,0) scale(1.14)}}
+/* Three 90px-blur layers compositing forever is real GPU work on a phone.
+   JS drops this class once the hero scrolls away. */
+.aurora.paused span{animation-play-state:paused}
+
+.grid-veil{
+  position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.35;
+  background-image:
+    linear-gradient(rgba(255,255,255,.028) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.028) 1px,transparent 1px);
+  background-size:64px 64px;
+  mask-image:radial-gradient(120% 80% at 50% 0%,#000 10%,transparent 70%);
+  -webkit-mask-image:radial-gradient(120% 80% at 50% 0%,#000 10%,transparent 70%);
+}
+
+.progress{
+  position:fixed;top:0;left:0;height:2px;width:100%;z-index:100;
+  background:linear-gradient(90deg,var(--blue),var(--coral),var(--amber));
+  transform:scaleX(0);transform-origin:0 50%;
+}
+
+/* ── Layout primitives ──────────────────────────────────────────── */
+.wrap{position:relative;z-index:2;max-width:var(--maxw);margin:0 auto;padding:0 24px}
+section{position:relative;z-index:2}
+.section{padding:110px 0}
+@media (max-width:820px){.section{padding:76px 0}}
+
+.eyebrow{
+  font-family:'Syne',sans-serif;font-weight:700;font-size:11.5px;letter-spacing:3.4px;
+  text-transform:uppercase;color:var(--blue);margin-bottom:18px;
+}
+.eyebrow.c{color:var(--coral)} .eyebrow.a{color:var(--amber)} .eyebrow.m{color:var(--muted)}
+
+h1,h2,h3,h4{font-family:'Syne',sans-serif;letter-spacing:-.5px;line-height:1.12}
+/* balance equalises line lengths — right for short, centred section headings,
+   wrong for a long left-aligned hero, where it strands a two-word line. */
+h1{text-wrap:pretty}
+h2{text-wrap:balance}
+h1{font-weight:800;font-size:clamp(36px,5.1vw,58px);letter-spacing:-1.6px}
+h2{font-weight:800;font-size:clamp(29px,4.4vw,46px);letter-spacing:-1.1px}
+h3{font-weight:700;font-size:20px}
+/* The nav is sticky, so anchor jumps must clear it. */
+[id]{scroll-margin-top:94px}
+
+.lead{color:var(--dim);font-size:clamp(17px,2.2vw,20px);line-height:1.68}
+.head{max-width:720px}
+.head.center{margin:0 auto;text-align:center}
+.head p{color:var(--muted);font-size:18px;line-height:1.7;margin-top:20px}
+
+/* Vertical on purpose: a diagonal gradient breaks unpredictably across
+   however many lines the headline wraps to. Top-down always reads clean. */
+.grad{background:linear-gradient(180deg,#ffffff 8%,#8fd6f6 92%);
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+
+/* ── Buttons ────────────────────────────────────────────────────── */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:10px;
+  font-family:'DM Sans',sans-serif;font-weight:600;font-size:15.5px;
+  padding:15px 26px;border-radius:13px;border:1px solid transparent;
+  transition:transform .2s var(--ease),box-shadow .25s,border-color .2s,background .2s;
+  white-space:nowrap;cursor:pointer;
+}
+.btn svg{width:17px;height:17px;flex:none}
+.btn-primary{background:var(--blue);color:#04222e;box-shadow:0 6px 26px -8px rgba(14,165,233,.75)}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 12px 36px -8px rgba(14,165,233,.9)}
+.btn-ghost{border-color:var(--border-lit);color:var(--text);background:rgba(255,255,255,.02)}
+.btn-ghost:hover{border-color:var(--blue);transform:translateY(-2px);background:rgba(14,165,233,.06)}
+.btn-sm{padding:10px 18px;font-size:14px;border-radius:11px}
+
+/* ── Nav ────────────────────────────────────────────────────────── */
+header.nav{
+  position:sticky;top:0;z-index:60;
+  transition:background .3s,border-color .3s,backdrop-filter .3s;
+  border-bottom:1px solid transparent;
+}
+header.nav.stuck{
+  background:rgba(7,7,8,.78);backdrop-filter:blur(16px) saturate(140%);
+  -webkit-backdrop-filter:blur(16px) saturate(140%);
+  border-bottom-color:var(--border);
+}
+.nav-in{display:flex;align-items:center;gap:20px;height:70px}
+.logo{
+  font-family:'Syne',sans-serif;font-weight:800;font-size:17px;letter-spacing:3px;
+  padding:8px 14px;border-radius:11px;border:1px solid var(--border-lit);
+  background:linear-gradient(180deg,#16161a,#0c0c0e);color:var(--text);
+  transition:border-color .2s,transform .2s var(--ease);
+}
+.logo:hover{border-color:var(--blue);transform:translateY(-1px)}
+.nav-links{display:flex;gap:4px;margin-left:auto}
+.nav-links a{
+  color:var(--muted);font-size:14.5px;font-weight:500;padding:9px 14px;border-radius:9px;
+  transition:color .18s,background .18s;
+}
+.nav-links a:hover{color:var(--text);background:rgba(255,255,255,.045)}
+.nav-links a[aria-current]{color:var(--text);background:rgba(14,165,233,.12)}
+.nav-cta{margin-left:8px}
+
+.burger{
+  display:none;margin-left:8px;width:42px;height:42px;flex:none;
+  align-items:center;justify-content:center;
+  border:1px solid var(--border-lit);border-radius:11px;
+  background:rgba(255,255,255,.02);cursor:pointer;
+}
+.burger span{display:block;position:relative;width:17px;height:1.5px;background:var(--text);
+  border-radius:2px;transition:transform .28s var(--ease),background .18s}
+.burger span::before,.burger span::after{
+  content:"";position:absolute;left:0;width:17px;height:1.5px;background:var(--text);
+  border-radius:2px;transition:transform .28s var(--ease),top .28s var(--ease)}
+.burger span::before{top:-5.5px} .burger span::after{top:5.5px}
+.burger[aria-expanded="true"] span{background:transparent}
+.burger[aria-expanded="true"] span::before{top:0;transform:rotate(45deg)}
+.burger[aria-expanded="true"] span::after{top:0;transform:rotate(-45deg)}
+
+.mobile-menu{
+  display:none;overflow:hidden;
+  border-top:1px solid var(--border);
+  background:rgba(7,7,8,.94);
+  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  /* max-height is set from the panel's real scrollHeight in JS — a hardcoded
+     cap silently clips the last link the moment an item is added. */
+  max-height:0;transition:max-height .38s var(--ease);
+}
+.mobile-menu nav{display:flex;flex-direction:column;padding:10px 0 20px}
+.mobile-menu a{
+  color:var(--dim);font-size:16.5px;font-weight:500;padding:14px 4px;
+  border-bottom:1px solid rgba(255,255,255,.045);
+}
+.mobile-menu a:last-child{border-bottom:none}
+
+@media (max-width:900px){
+  .nav-links{display:none}
+  .burger{display:flex}
+  .mobile-menu{display:block}
+  .nav-cta{margin-left:auto}
+}
+/* The CTA stays at every width — logo + CTA + burger fit inside 375px. */
+@media (max-width:420px){.nav-cta{padding:10px 14px;font-size:13.5px}}
+/* At 320px (iPhone SE and small Androids) the three nav items need ~308px of
+   a 257px row, which scrolls the whole document sideways. Tighten rather than
+   drop the CTA — it is the page's primary action. */
+@media (max-width:380px){
+  .wrap{padding:0 16px}
+  .nav-in{gap:8px}
+  .logo{font-size:15px;letter-spacing:2px;padding:7px 11px}
+  .nav-cta{padding:9px 11px;font-size:12.5px}
+  .burger{width:38px;height:38px;margin-left:4px}
+}
+
+/* ── Footer ─────────────────────────────────────────────────────── */
+footer{border-top:1px solid var(--border);margin-top:90px;padding:60px 0 50px;position:relative;z-index:2}
+.fgrid{display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr;gap:44px;margin-bottom:52px}
+@media (max-width:820px){.fgrid{grid-template-columns:1fr 1fr;gap:36px}}
+@media (max-width:480px){.fgrid{grid-template-columns:1fr}}
+.fbrand p{color:var(--muted);font-size:14.5px;line-height:1.7;margin-top:18px;max-width:280px}
+.fcol h3{font-family:'Syne',sans-serif;font-weight:700;font-size:12px;letter-spacing:2px;
+  text-transform:uppercase;color:var(--faint);margin-bottom:10px}
+/* 24x24 is the WCAG 2.2 (2.5.8) minimum target; these were 218x23. */
+.fcol a,.fcol span{display:block;color:var(--muted);font-size:14.5px;
+  padding:7px 0;transition:color .18s}
+.fcol a:hover{color:var(--blue)}
+.fbot{border-top:1px solid var(--border);padding-top:28px;display:flex;
+  justify-content:space-between;gap:8px 16px;flex-wrap:wrap;color:var(--faint);font-size:13.5px}
+.fbot a{color:var(--faint);display:inline-block;padding:4px 0}
+.fbot a:hover{color:var(--muted)}
+
+/* ── Reveal on scroll ───────────────────────────────────────────── */
+/* Gated on .js, set by an inline script in <head>. Without JavaScript the
+   hidden state never applies at all, so the page renders in full rather
+   than showing an empty shell. */
+.js .reveal{
+  opacity:0;transform:translateY(26px);
+  transition:opacity .8s var(--ease),transform .8s var(--ease);
+  transition-delay:var(--d,0ms);
+}
+.js .reveal.in{opacity:1;transform:none}
+
+/* ── Prose — the legal / document pages ─────────────────────────── */
+.prose{max-width:760px;margin:0 auto;padding:56px 0 20px}
+.prose h1{font-size:clamp(30px,4.6vw,44px);margin-bottom:10px}
+.prose .updated{color:var(--faint);font-size:14px;margin-bottom:40px}
+.prose h2{font-family:'Syne',sans-serif;font-weight:700;font-size:clamp(20px,2.6vw,25px);
+  letter-spacing:-.4px;margin:44px 0 14px;padding-top:22px;border-top:1px solid var(--border)}
+.prose h2:first-of-type{border-top:none;padding-top:0}
+.prose h3{font-size:17px;margin:26px 0 10px;color:var(--dim)}
+.prose p,.prose li{color:var(--dim);font-size:16.5px;line-height:1.75}
+.prose p{margin-bottom:16px}
+.prose ul,.prose ol{margin:0 0 18px 22px}
+.prose li{margin-bottom:9px}
+.prose strong{color:var(--text);font-weight:600}
+.prose a{color:var(--blue);text-decoration:underline;text-underline-offset:3px}
+.prose code{background:rgba(255,255,255,.06);border:1px solid var(--border);
+  padding:2px 6px;border-radius:5px;font-size:14px;color:var(--dim)}
+.prose .muted{color:var(--muted);font-size:14.5px}
+.prose .note{
+  background:rgba(14,165,233,.07);border:1px solid rgba(14,165,233,.22);
+  border-left:3px solid var(--blue);border-radius:0 12px 12px 0;
+  padding:16px 20px;margin:22px 0;
+}
+.prose .note p:last-child{margin-bottom:0}
+.prose .warn{
+  background:rgba(244,63,94,.07);border:1px solid rgba(244,63,94,.24);
+  border-left:3px solid var(--coral);border-radius:0 12px 12px 0;
+  padding:16px 20px;margin:22px 0;
+}
+.prose .warn p:last-child{margin-bottom:0}
+/* Wide tables must scroll inside their own box, never the page. */
+.table-scroll{overflow-x:auto;margin:20px 0;
+  border:1px solid var(--border);border-radius:14px}
+.prose table{border-collapse:collapse;width:100%;min-width:520px;font-size:15px}
+.prose th,.prose td{border-bottom:1px solid var(--border);padding:12px 16px;
+  text-align:left;vertical-align:top;color:var(--dim)}
+.prose tr:last-child td{border-bottom:none}
+.prose th{background:rgba(255,255,255,.035);color:var(--text);
+  font-family:'Syne',sans-serif;font-weight:700;font-size:13px;
+  letter-spacing:.4px;text-transform:uppercase}
+
+/* Back-to-home affordance on document pages */
+.doc-back{display:inline-flex;align-items:center;gap:8px;color:var(--muted);
+  font-size:14.5px;padding:8px 0;margin-bottom:8px}
+.doc-back:hover{color:var(--blue)}
+
+/* ── Print ──────────────────────────────────────────────────────── */
+/* The legal pages are the ones people actually print or save as PDF. */
+@media print{
+  .aurora,.grid-veil,.progress,.skip,header.nav,.mobile-menu,
+  .doc-back,.btn,footer .fgrid{display:none!important}
+  html,body{background:#fff!important;color:#000!important}
+  .prose{max-width:none;padding:0}
+  .prose h1,.prose h2,.prose h3,.prose strong{color:#000!important}
+  .prose p,.prose li,.prose td,.prose th{color:#1a1a1a!important}
+  .prose h2{border-top:1px solid #ccc}
+  .prose a{color:#000!important;text-decoration:underline}
+  .prose a[href^="http"]::after{content:" (" attr(href) ")";font-size:11px;color:#555}
+  .prose .note,.prose .warn{border:1px solid #ccc;background:#f7f7f7}
+  .table-scroll{border:none;overflow:visible}
+  .prose th,.prose td{border:1px solid #ccc}
+  .prose th{background:#f0f0f0}
+  footer{border-top:1px solid #ccc;margin-top:24px;padding:16px 0}
+  .fbot{color:#555;border:none}
+}
+
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation:none!important;transition-duration:.01ms!important}
+  .js .reveal{opacity:1;transform:none}
+}

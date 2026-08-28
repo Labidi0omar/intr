@@ -1,33 +1,43 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Intr — Contributors</title>
+<meta name="description" content="A permanent thank-you wall for the people who backed Intr early — the founders and backers who made an independent, ad-free training app possible.">
+<meta name="theme-color" content="#070708">
+<link rel="canonical" href="https://labidi0omar.github.io/intr/contributors.html">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Intr">
+<meta property="og:title" content="Intr — Contributors">
+<meta property="og:description" content="A permanent thank-you wall for the people who backed Intr early.">
+<meta property="og:url" content="https://labidi0omar.github.io/intr/contributors.html">
+<meta property="og:image" content="https://labidi0omar.github.io/intr/og-card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Intr — Contributors">
+<meta name="twitter:description" content="A permanent thank-you wall for the people who backed Intr early.">
+<meta name="twitter:image" content="https://labidi0omar.github.io/intr/og-card.png">
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23070708'/%3E%3Crect x='14' y='16' width='6' height='32' rx='3' fill='%230EA5E9'/%3E%3Crect x='27' y='24' width='6' height='24' rx='3' fill='%23F43F5E'/%3E%3Crect x='40' y='30' width='6' height='18' rx='3' fill='%23F59E0B'/%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="site.webmanifest">
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" media="print" onload="this.media='all';this.onload=null" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600&display=swap">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600&display=swap"></noscript>
+<link rel="stylesheet" href="site.css">
 <style>
-  :root{
-    --bg:#070708;
-    --panel:#0f0f11;
-    --border:#1e1e22;
-    --text:#f5f5f6;
-    --muted:#7c7c85;
-    --faint:#4a4a52;
-    --teal:#2dd4bf;
-    --coral:#fb7185;
-    --amber:#fbbf24;
-  }
-  *{box-sizing:border-box;margin:0;padding:0}
-  html{scroll-behavior:smooth}
-  body{background:var(--bg);color:var(--text);font-family:'DM Sans',system-ui,sans-serif;
-    -webkit-font-smoothing:antialiased;min-height:100vh;overflow-x:hidden;position:relative}
+  /* Base tokens, reset, body and font come from site.css. Only this page's
+     bespoke thank-you-wall layout lives here. */
 
   /* ambient glow */
   body::before{content:"";position:fixed;top:-320px;left:50%;transform:translateX(-50%);
     width:900px;height:640px;pointer-events:none;z-index:0;
-    background:radial-gradient(closest-side, rgba(45,212,191,.13), rgba(251,113,133,.05) 55%, transparent 75%);
+    background:radial-gradient(closest-side, rgba(14,165,233,.13), rgba(244,63,94,.05) 55%, transparent 75%);
     filter:blur(20px)}
   /* vignette */
   body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
@@ -36,16 +46,13 @@
   .wrap{position:relative;z-index:1;width:100%;max-width:820px;margin:0 auto;padding:72px 24px 110px}
   @media (max-width:600px){ .wrap{padding:48px 20px 80px} }
 
-  a{color:var(--teal);text-decoration:none}
-  a:hover{text-decoration:underline}
-
   .brand{display:flex;justify-content:center;margin-bottom:34px}
   .logo{font-family:'Syne',sans-serif;font-weight:800;font-size:20px;letter-spacing:3px;
     padding:9px 16px;border-radius:12px;border:1px solid var(--border);
     background:linear-gradient(180deg,#141416,#0d0d0f)}
 
   .eyebrow{text-align:center;font-family:'Syne',sans-serif;font-weight:600;font-size:12px;
-    letter-spacing:4px;text-transform:uppercase;color:var(--teal);margin-bottom:20px}
+    letter-spacing:4px;text-transform:uppercase;color:var(--blue);margin-bottom:20px}
   .tag{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(34px,7vw,60px);
     text-align:center;line-height:1.05;letter-spacing:-1px;margin-bottom:26px}
   .lead{color:#c4c4cc;text-align:center;font-size:clamp(16px,4vw,18px);line-height:1.85;max-width:500px;margin:0 auto 26px}
@@ -68,11 +75,11 @@
 
   .tier-head{display:flex;align-items:center;gap:12px;margin-bottom:26px}
   .dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
-  .t-amber .dot{background:var(--amber);box-shadow:0 0 12px rgba(251,191,36,.5)}
-  .t-coral .dot{background:var(--coral);box-shadow:0 0 12px rgba(251,113,133,.5)}
-  .t-teal  .dot{background:var(--teal); box-shadow:0 0 12px rgba(45,212,191,.5)}
+  .t-amber .dot{background:var(--amber);box-shadow:0 0 12px rgba(245,158,11,.5)}
+  .t-coral .dot{background:var(--coral);box-shadow:0 0 12px rgba(244,63,94,.5)}
+  .t-teal  .dot{background:var(--blue); box-shadow:0 0 12px rgba(14,165,233,.5)}
   .tier-name{font-family:'Syne',sans-serif;font-weight:700;font-size:14px;letter-spacing:1.5px;text-transform:uppercase}
-  .t-amber .tier-name{color:var(--amber)} .t-coral .tier-name{color:var(--coral)} .t-teal .tier-name{color:var(--teal)}
+  .t-amber .tier-name{color:var(--amber)} .t-coral .tier-name{color:var(--coral)} .t-teal .tier-name{color:var(--blue)}
   .tier-badge{margin-left:auto;font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
 
   .names{display:flex;flex-wrap:wrap;gap:14px 40px;padding-left:21px}
@@ -81,7 +88,7 @@
     position:relative;transition:color .18s;cursor:default}
   .person::after{content:"";position:absolute;left:0;right:100%;bottom:-3px;height:1.5px;
     background:currentColor;transition:right .25s ease;opacity:.6}
-  .t-amber .person:hover{color:var(--amber)} .t-coral .person:hover{color:var(--coral)} .t-teal .person:hover{color:var(--teal)}
+  .t-amber .person:hover{color:var(--amber)} .t-coral .person:hover{color:var(--coral)} .t-teal .person:hover{color:var(--blue)}
   .person:hover::after{right:0}
 
   .empty{text-align:center;color:var(--muted);padding:40px 24px 10px}
@@ -100,8 +107,9 @@
 </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="brand"><span class="logo">INTR</span></div>
+  <a class="skip" href="#main">Skip to content</a>
+  <main class="wrap" id="main">
+    <div class="brand"><a href="index.html" class="logo" aria-label="Intr — home">INTR</a></div>
 
     <div class="eyebrow">A note from Omar</div>
     <h1 class="tag">Thank&nbsp;you.</h1>
@@ -129,7 +137,7 @@
       <b>Intr</b> — live on Google Play, coming to iPhone.<br>
       No ads. No data selling. No streaks. Training free forever.
     </div>
-  </div>
+  </main>
 
 <script>
   // ── ADD CONTRIBUTORS HERE ───────────────────────────────────────
@@ -179,5 +187,43 @@
     requestAnimationFrame(tick);
   }
 </script>
+
+<footer>
+  <div class="wrap" style="max-width:1140px;padding:0 24px">
+    <h2 class="sr-only">Intr footer</h2>
+    <div class="fgrid">
+      <div class="fbrand">
+        <a href="index.html" class="logo">INTR</a>
+        <p>A coach in your pocket. Adaptive strength training that reads your real numbers,
+        explains every decision, and never guilts you into a session.</p>
+      </div>
+      <div class="fcol">
+        <h3>Product</h3>
+        <a href="index.html#how">How it works</a>
+        <a href="index.html#features">Features</a>
+        <a href="index.html#roadmap">Roadmap</a>
+        <a href="index.html#faq">FAQ</a>
+      </div>
+      <div class="fcol">
+        <h3>Get Intr</h3>
+        <a href="https://play.google.com/store/apps/details?id=com.intr.app" target="_blank" rel="noopener">Google Play</a>
+        <span>iPhone — in development</span>
+        <a href="contributors.html" aria-current="page">Contributors</a>
+        <a href="https://github.com/Labidi0omar/intr" target="_blank" rel="noopener">Source on GitHub</a>
+      </div>
+      <div class="fcol">
+        <h3>Legal</h3>
+        <a href="privacy-policy.html">Privacy Policy</a>
+        <a href="terms-of-use.html">Terms of Use</a>
+        <a href="account-deletion.html">Account &amp; Data Deletion</a>
+        <a href="mailto:labidiomar04@gmail.com">Contact</a>
+      </div>
+    </div>
+    <div class="fbot">
+      <div>&copy; 2026 Omar Labidi. All rights reserved.</div>
+      <div><a href="mailto:labidiomar04@gmail.com">labidiomar04@gmail.com</a></div>
+    </div>
+  </div>
+</footer>
 </body>
 </html>

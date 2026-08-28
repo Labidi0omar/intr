@@ -1,32 +1,82 @@
 <!DOCTYPE html>
-<!--
-  Web-accessible account & data deletion request page. Google Play requires a
-  public URL (separate from any in-app button) where users can request deletion.
-  Host this at a public, non-PDF URL (GitHub Pages) and paste that URL into
-  Play Console → App content → Data safety → Account deletion.
-  Live URL: https://labidi0omar.github.io/intr/account-deletion.html
--->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Intr — Account &amp; Data Deletion</title>
-<style>
-  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 760px; margin: 0 auto; padding: 24px; color: #1a1a1a; line-height: 1.6; }
-  h1 { font-size: 1.7rem; } h2 { font-size: 1.2rem; margin-top: 2rem; } h3 { font-size: 1rem; }
-  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.95rem; }
-  th, td { border: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; }
-  th { background: #f5f5f5; }
-  code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; }
-  .muted { color: #666; font-size: 0.9rem; }
-  .note { background: #f7f9fc; border-left: 3px solid #4a90d9; padding: 10px 14px; margin: 1rem 0; }
-  a { color: #2563c9; }
-</style>
+<title>Intr — Account & Data Deletion</title>
+<meta name="description" content="How to delete your Intr account and every piece of personal data attached to it — from inside the app, or by email.">
+<meta name="theme-color" content="#070708">
+<link rel="canonical" href="https://labidi0omar.github.io/intr/account-deletion.html">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Intr">
+<meta property="og:title" content="Intr — Account & Data Deletion">
+<meta property="og:description" content="How to delete your Intr account and every piece of personal data attached to it — from inside the app, or by email.">
+<meta property="og:url" content="https://labidi0omar.github.io/intr/account-deletion.html">
+<meta property="og:image" content="https://labidi0omar.github.io/intr/og-card.png">
+<meta name="twitter:card" content="summary_large_image">
+
+<script>document.documentElement.className='js'</script>
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23070708'/%3E%3Crect x='14' y='16' width='6' height='32' rx='3' fill='%230EA5E9'/%3E%3Crect x='27' y='24' width='6' height='24' rx='3' fill='%23F43F5E'/%3E%3Crect x='40' y='30' width='6' height='18' rx='3' fill='%23F59E0B'/%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="site.webmanifest">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" media="print" onload="this.media='all';this.onload=null"
+      href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600&display=swap">
+<noscript><link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600&display=swap"></noscript>
+
+<link rel="stylesheet" href="site.css">
 </head>
 <body>
 
+<a class="skip" href="#main">Skip to content</a>
+
+<div class="aurora" aria-hidden="true"><span class="a1"></span><span class="a2"></span><span class="a3"></span></div>
+<div class="grid-veil" aria-hidden="true"></div>
+
+<header class="nav" id="nav">
+  <div class="wrap nav-in">
+    <a href="index.html" class="logo" aria-label="Intr — home">INTR</a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="index.html#how">How it works</a>
+      <a href="index.html#features">Features</a>
+      <a href="index.html#roadmap">Roadmap</a>
+      <a href="index.html#faq">FAQ</a>
+      <a href="contributors.html">Contributors</a>
+    </nav>
+    <a class="btn btn-primary btn-sm nav-cta" href="https://play.google.com/store/apps/details?id=com.intr.app" target="_blank" rel="noopener">Get the app</a>
+    <button class="burger" id="burger" type="button"
+            aria-expanded="false" aria-controls="mobile-menu" aria-label="Open menu">
+      <span></span>
+    </button>
+  </div>
+  <div class="mobile-menu" id="mobile-menu">
+    <div class="wrap">
+      <nav aria-label="Mobile">
+        <a href="index.html#how">How it works</a>
+        <a href="index.html#features">Features</a>
+        <a href="index.html#roadmap">Roadmap</a>
+        <a href="index.html#faq">FAQ</a>
+        <a href="contributors.html">Contributors</a>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main id="main" class="wrap">
+  <article class="prose">
+    <a class="doc-back" href="index.html">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+      Back to Intr
+    </a>
+
 <h1>Intr — Account &amp; Data Deletion</h1>
-<p class="muted">Last updated: 16 June 2026</p>
+<p class="updated">Last updated: 16 June 2026</p>
 
 <p>This page explains how to request deletion of your <strong>Intr</strong> account and the personal data associated with it. It applies to the Intr mobile application published by <strong>Omar Labidi</strong>. For anything else, contact us at <strong>labidiomar04@gmail.com</strong>.</p>
 
@@ -39,7 +89,7 @@
 
 <h2>What gets deleted</h2>
 <p>Deleting your account permanently removes all of the following:</p>
-<table>
+<div class="table-scroll"><table>
 <tr><th>Data</th><th>Examples</th></tr>
 <tr><td>Profile &amp; onboarding data</td><td>Username, goal, fitness level, split preference, training days</td></tr>
 <tr><td>Training plan &amp; coaching</td><td>Your weekly plan and any coach messages</td></tr>
@@ -47,7 +97,7 @@
 <tr><td>Body metrics</td><td>Bodyweight entries you logged</td></tr>
 <tr><td>Daily check-ins &amp; journal entries</td><td>Reflections and any mood/energy you recorded</td></tr>
 <tr><td>Account &amp; authentication</td><td>Your email/login record in our authentication system</td></tr>
-</table>
+</table></div>
 
 <div class="note">
 <strong>Timeframe.</strong> Your data is removed from our active systems <strong>immediately</strong> and is fully and permanently deleted across all systems and backups <strong>within 72 hours</strong>. Limited diagnostic logs (crash/error reports) are retained for a short period and then automatically discarded.
@@ -59,7 +109,69 @@
 <h2>Questions</h2>
 <p>If you have any trouble deleting your account, email <strong>labidiomar04@gmail.com</strong> and we will help. See also our <a href="privacy-policy.html">Privacy Policy</a> and <a href="terms-of-use.html">Terms of Use</a>.</p>
 
-<p class="muted">Omar Labidi — labidiomar04@gmail.com</p>
+  </article>
+</main>
 
+<footer>
+  <div class="wrap">
+    <div class="fgrid">
+      <div class="fbrand">
+        <a href="index.html" class="logo">INTR</a>
+        <p>A coach in your pocket. Adaptive strength training that reads your real numbers,
+        explains every decision, and never guilts you into a session.</p>
+      </div>
+      <div class="fcol">
+        <h3>Product</h3>
+        <a href="index.html#how">How it works</a>
+        <a href="index.html#features">Features</a>
+        <a href="index.html#roadmap">Roadmap</a>
+        <a href="index.html#faq">FAQ</a>
+      </div>
+      <div class="fcol">
+        <h3>Get Intr</h3>
+        <a href="https://play.google.com/store/apps/details?id=com.intr.app" target="_blank" rel="noopener">Google Play</a>
+        <span>iPhone — in development</span>
+        <a href="contributors.html">Contributors</a>
+      </div>
+      <div class="fcol">
+        <h3>Legal</h3>
+        <a href="privacy-policy.html">Privacy Policy</a>
+        <a href="terms-of-use.html">Terms of Use</a>
+        <a href="account-deletion.html">Account &amp; Data Deletion</a>
+        <a href="mailto:labidiomar04@gmail.com">Contact</a>
+      </div>
+    </div>
+    <div class="fbot">
+      <div>&copy; 2026 Omar Labidi. All rights reserved.</div>
+      <div><a href="mailto:labidiomar04@gmail.com">labidiomar04@gmail.com</a></div>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var nav = document.getElementById('nav');
+  function onScroll(){ nav.classList.toggle('stuck', (window.scrollY||0) > 12); }
+  window.addEventListener('scroll', onScroll, {passive:true}); onScroll();
+
+  var burger = document.getElementById('burger');
+  var menu = document.getElementById('mobile-menu');
+  var inner = menu.querySelector('.wrap');
+  function setMenu(open){
+    menu.classList.toggle('open', open);
+    menu.style.maxHeight = open ? inner.scrollHeight + 'px' : '0px';
+    burger.setAttribute('aria-expanded', String(open));
+    burger.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+  }
+  burger.addEventListener('click', function(){
+    setMenu(burger.getAttribute('aria-expanded') !== 'true');
+  });
+  menu.addEventListener('click', function(e){ if (e.target.tagName === 'A') setMenu(false); });
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape' && burger.getAttribute('aria-expanded') === 'true'){ setMenu(false); burger.focus(); }
+  });
+  window.addEventListener('resize', function(){ if (window.innerWidth > 900) setMenu(false); });
+})();
+</script>
 </body>
 </html>

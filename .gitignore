@@ -2,7 +2,21 @@
 !/legal/
 # Published pages served at the site root (labidi0omar.github.io/intr/...)
 !/index.html
+!/404.html
 !/privacy-policy.html
 !/terms-of-use.html
 !/account-deletion.html
+!/contributors.html
+# Shared stylesheet — every page depends on this; without it the site is unstyled
+!/site.css
+# Assets
+!/screens
+!/og-card.png
+!/apple-touch-icon.png
+!/icon-512.png
+!/icon.svg
+!/site.webmanifest
+# Crawler files
+!/robots.txt
+!/sitemap.xml
 !/.well-known
