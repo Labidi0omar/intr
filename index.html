@@ -254,7 +254,7 @@
 .stat{padding:30px 24px;border-right:1px solid var(--border);text-align:center}
 .stat:last-child{border-right:none}
 @media (max-width:760px){
-  .stat{border-bottom:1px solid var(--border)}
+  .stat{border-bottom:1px solid var(--border);padding:24px 16px}
   .stat:nth-child(2n){border-right:none}
   .stat:nth-last-child(-n+2){border-bottom:none}
 }
@@ -264,6 +264,12 @@
 .stat:nth-child(3) .n{color:var(--amber)}
 .stat:nth-child(4) .n{color:var(--green)}
 .stat .l{color:var(--muted);font-size:13.5px;margin-top:10px;line-height:1.45}
+/* Phones: smaller numbers + label so the 2×2 grid isn't cramped (after the
+   base rules above so these win the cascade). */
+@media (max-width:760px){
+  .stat .n{font-size:31px;letter-spacing:-1px}
+  .stat .l{font-size:12.5px;margin-top:8px}
+}
 
 /* ── Cards ──────────────────────────────────────────────────────── */
 .card{
@@ -406,8 +412,10 @@
 .frow:first-of-type{padding-top:16px}
 .frow.flip .fcopy{order:2}
 @media (max-width:900px){
-  .frow{grid-template-columns:1fr;gap:44px;padding:56px 0}
-  .frow.flip .fcopy{order:0}
+  .frow{grid-template-columns:1fr;gap:26px;padding:44px 0}
+  /* On phones the screenshot leads and the description follows, for every
+     row (flip and non-flip alike) — the image column keeps default order 0. */
+  .frow .fcopy{order:2}
 }
 .fcopy h2,.fcopy h3{margin-bottom:20px;font-size:clamp(26px,3.6vw,38px)}
 .fcopy p{color:var(--muted);font-size:17px;line-height:1.75;margin-bottom:18px}
