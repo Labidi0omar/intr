@@ -496,6 +496,23 @@
 .q .ans{padding:0 26px 24px;color:var(--muted);font-size:16px;line-height:1.72}
 .q .ans a{color:var(--blue)}
 
+/* Phones: the cards carry desktop padding, which reads oversized on a narrow
+   screen. Compact every card type (padding, icon, gaps) without shrinking the
+   copy. Placed after the base card rules so it wins the cascade; scoped to
+   <=560px so tablet/desktop are untouched. */
+@media (max-width:560px){
+  .card{padding:22px 20px}
+  .card .ico{width:36px;height:36px;margin-bottom:13px;border-radius:10px}
+  .card .ico svg{width:18px;height:18px}
+  .card h3{margin-bottom:8px}
+  .grid2,.grid3{gap:14px}
+  .step{padding:24px 20px}
+  .principles{padding:26px 22px;gap:22px}
+  .ritem{padding:20px}
+  .q summary{padding:18px 20px}
+  .q .ans{padding:0 20px 20px}
+}
+
 /* ── Final CTA ──────────────────────────────────────────────────── */
 .finale{
   position:relative;border:1px solid var(--border);border-radius:26px;
